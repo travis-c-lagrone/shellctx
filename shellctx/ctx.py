@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
 """
+#!/usr/bin/env python3
 shellctx
 --------
 
@@ -14,14 +14,22 @@ License:  GNU GPLv3, https://www.gnu.org/licenses/gpl-3.0.en.html
 
 """
 
-import os
-import sys
+import abc
+import argparse
+import datetime
+import functools
+import inspect
 import json
+import os  # TODO refactor uses of module `os.path` to `pathlib`
+import sys
 
-__version__ = '0.1.4.dev0'
+__version__ = '1.0.0-dev.0'
+
+WINDOWS = sys.platform.startswith('win')  # TODO refactor `sys.platform` constant to `platform` module
+ISATTY = sys.stdout.isatty()
 
 # ANSI coloring
-color = {
+COLOR = {
     '': '\033[0m',  # reset
     'black': '\033[0;30m',
     'red': '\033[0;31m',
@@ -30,486 +38,607 @@ color = {
     'yellow': '\033[0;33m',
 }
 
+if WINDOWS or is not ISATTY:  # TODO test more elegantly if terminal colors supported on Windows
+    COLOR = dict.fromkeys(COLOR.keys(), '')
 
-WINDOWS = False
-if sys.platform.startswith('win'):
-    WINDOWS = True
-    color = dict.fromkeys(color.keys(), '')
-
-if not sys.stdout.isatty():
-    color = dict.fromkeys(color.keys(), '')
-
-style = {
-    '':color[''],  # blank
-    'key': color['green'],
-    'value': color['blue'],
-    'time': color['red'],
-    'command': color['blue'],
-    'context': color['blue'],
+STYLE = {
+    '': COLOR[''],  # blank
+    'key': COLOR['green'],
+    'value': COLOR['blue'],
+    'time': COLOR['red'],
+    'command': COLOR['blue'],
+    'context': COLOR['blue'],
 }
 
+ENV_CTX_HOME = os.environ.get('CTX_HOME', None)
+ENV_CTX_NAME = os.environ.get('CTX_NAME')
+ENV_CTX_VERBOSE = int(os.environ.get('CTX_VERBOSE', 0))
+
+CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
+CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
+
+CTX_NAME = 'main'
+
+if ENV_CTX_NAME:
+    CTX_NAME = ENV_CTX_NAME
+elif os.path.exists(CTX_NAME_FILE):
+    with open(CTX_NAME_FILE, 'r') as _fid:
+        CTX_NAME = _fid.read().strip()
+
+CTX_FILE = os.path.join(CTX_HOME, CTX_NAME + '.json')
+LOG_FILE = os.path.join(CTX_HOME, CTX_NAME + '.log')
+
+
+class LazyData(abc.ABC):
+    def __init__(self, file):
+        self._file = file
+        self.__data = None
+        self._modified = False
+
+    @abc.abstractmethod
+    def _get_default_data(self):
+        pass
+
+    def _load(self):
+        if os.path.exists(self._file):
+            with open(self._file, 'rb') as fid:
+                data = fid.read()
+            self.__data = json.loads(data.decode('utf8'))
+        else:
+            self.__data = self._get_default_data()
+
+    def load(self):
+        if self.__data is None:
+            self._load()
+
+    @property
+    def _data(self):
+        if self.__data is None:
+            self._load()
+        return self.__data
+
+    def __contains__(self, item):
+        return item in self._data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    @property
+    def modified(self):
+        return self._modified
+
+    def _save(self):
+        assert self._data is not None
+        with open(self._file, 'wb') as fid:
+            fid.write(json.dumps(self._data, indent=4).encode('utf8'))
+
+    def save(self):
+        if self._modified:
+            self._save()
+
+
+class ContextData(LazyData):
+    def _get_default_data(self):
+        return {}
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __setitem__(self, key, value):
+        self._data[key, value]
+        self._modified = True
+
+    def __delitem__(self, key):
+        del self._data[key]
+        self._modified = True
+
+    def clear(self):
+        self._data.clear()
+        self._modified = True
+
+    def items(self):
+        return self._data.items()
+
+    def keys(self):
+        return self._data.keys()
+
+    def update(self, other):
+        self._data.update(other)
+        self._modified = True
+
+    def values(self):
+        return self._data.values()
+
+
+class LogData(LazyData):
+    def _get_default_data(self):
+        return []
+
+    def append(self, timestamp, command, *args):
+        self._data.append((timestamp, command, *args))
+
+
+CTX = ContextData(CTX_FILE)
+LOG = LogData(LOG_FILE)
+
+
+print_err = functools.partial(print, file=sys.stderr)
 
 
 def _print_version():
     s = ('shellctx version ',
-         color['red'],
+         COLOR['red'],
          __version__,
-         color['']
+         COLOR['']
          )
-    print(''.join(s), file=sys.stderr)
-
-env_name = os.environ.get('CTX_NAME')
-verbose_flag = int(os.environ.get('CTX_VERBOSE', 0))
+    print_err(''.join(s))
 
 
-if verbose_flag:
-    print('CTX_VERBOSE=%i' % verbose_flag, file=sys.stderr)
+def _print_verbose():
+    print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
     _print_version()
+    if ENV_CTX_HOME:
+        print_err('CTX_HOME=%s' % ENV_CTX_HOME)
+    if ENV_CTX_NAME:
+        print_err('CTX_NAME=%s' % ENV_CTX_NAME)
 
 
-import datetime
-def get_now():
-    now = datetime.datetime.now().isoformat()
-    return now
-
-now = get_now()
-
-ctx_home = os.environ.get('CTX_HOME', None)
-if ctx_home is None:
-    ctx = os.path.expanduser('~/.ctx')
-else:
-    if verbose_flag:
-        print('CTX_HOME=%s' % ctx_home, file=sys.stderr)
-    ctx = ctx_home
-
-os.makedirs(ctx, exist_ok=True)
-
-# grab the pointer name
-name_file = os.path.join(ctx, '_name.txt')
-if os.path.exists(name_file):
-    with open(name_file, 'r') as fid:
-        name = fid.read().strip()
-else:
-    name = 'main'
+def _print_parsed_args(args):
+    print_err('parsed args:')
+    args_D = vars(args)
+    max_key_len = max(len(k) for k in args_D.keys())
+    for (key, value) in args_D.items():
+        if key.startswith('_'):
+            continue
+        s = ('    ',
+             STYLE['key'],
+             key,
+             STYLE[''],
+             ':',
+             ' ' * (1 + (max_key_len - len(key))),
+             STYLE['value'],
+             repr(value),
+             STYLE['']
+            )
+        print_err(''.join(s))
 
 
-if env_name:
-    if verbose_flag:
-        print('CTX_NAME=%s' % env_name, file=sys.stderr)
-    name = env_name
-
-ctx_file = os.path.join(ctx, name + '.json')
-log_file = os.path.join(ctx, name + '.log')
-
-if os.path.exists(ctx_file):
-    with open(ctx_file, 'rb') as fid:
-        data = fid.read()
-        cdict = json.loads(data.decode('utf8'))
-else:
-    cdict = {}
+def _print_debug(args):
+    print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
+    _print_version()
+    print_err('CTX_HOME=%s' % ENV_CTX_HOME)
+    print_err('CTX_NAME=%s' % ENV_CTX_NAME)
+    print_err('context home: %s' % CTX_HOME)
+    print_err('context file: %s' % CTX_FILE)
+    _print_parsed_args(args)
 
 
-def load_log():
-    if os.path.exists(log_file):
-        with open(log_file, 'rb') as fid:
-            data = fid.read()
-            log = json.loads(data.decode('utf8'))
-    else:
-        log = []
-    return log
+def _print_full_items():
+    # timestamp, key, value
+    everything = [(v[0], k, v[1]) for k, v in CTX.items()]
+    x = sorted(everything, reverse=True)
+    s = ('Using context ', STYLE['context'], CTX_NAME, COLOR[''], '')
+    if ENV_CTX_NAME:
+        s = s + (' (set by CTX_NAME)', )
+    if ENV_CTX_HOME:
+        s = s + ((' (from CTX_HOME=%s)' % ENV_CTX_HOME),)
+    print(''.join(s))
+    s = ('There are ', STYLE['value'], str(len(everything)),
+        COLOR[''], ' entries.\n')
+    print(''.join(s))
 
-
-
-def _print_args():
-    # debug, dump sys.argv
-    print('sys.argv[:]', file=sys.stderr)
-    for n, i in enumerate(sys.argv):
-        s = (style['key'],
-             '  %3i' % n,
-             color[''],
-             ' = ',
-             style['value'],
-             repr(i),
-             color[''],
+    for ctime, _key, _value in x:
+        s = (STYLE['time'],
+             ctime, '    ',
+             STYLE['key'], _key,
+             COLOR[''], ' = ',
+             STYLE['value'], str(_value),
+             COLOR['']
              )
-        print(''.join(s), file=sys.stderr)
+        print(''.join(s))
 
 
-if verbose_flag > 1:
-    _print_args()
-    print(file=sys.stderr)
+def get_now():
+    return datetime.datetime.now().isoformat()
 
 
-cmd = None
-key = None
-value = None
-
-retcode = 0
-
-try:
-    cmd = sys.argv[1]
-    key = sys.argv[2]
-    v = sys.argv[3]  # trigger error if missing
-    value = ' '.join(sys.argv[3:])
-except IndexError:
-    pass
-
-if verbose_flag > 1:
-    s = ('processed arguments:\n',
-         '    command:  %s\n' % repr(cmd),
-         '    key:      %s\n' % repr(key),
-         '    value:    %s\n' % repr(value)
-         )
-    print(''.join(s), file=sys.stderr)
-
-    s = ('context home: %s\n' % ctx)
-    print(''.join(s), file=sys.stderr, end='')
-
-    s = ('context file: %s\n' % ctx_file)
-    print(''.join(s), file=sys.stderr)
+NOW = get_now()
 
 
-if cmd is None:
-    cmd = '_fullitems'
-
-need_store = False
-log_extra = []  # for extra logging information
+def set_handler(parser, handler):
+    parser.set_defaults(_handler=handler)
 
 
-if cmd == 'args':
-    _print_args()
+def handle(args):
+    args._handler(args)
 
-elif cmd == 'setpath':
-    assert(key is not None)
-    assert(value is not None)
-    base = os.getcwd()
-    if value == '.':  # . for pwd
-        store = base
+
+def handles(parser):
+    """Decorates a function:
+    - wraps it to accept a single parameter 'args',
+    - sets the wrapped function as the default `func` of {parser}
+    - returns the unwrapped function
+    """
+    def set_wrapped_handler(handler):
+        keys = inspect.getfullargspec(handler).args
+        has__args__ = '__args__' in keys
+        if has__args__:
+            keys = (k for k in keys if k != '__args__')
+        def wrapped(args):
+            kwargs = {k: getattr(args, k) for k in keys}
+            if has__args__:
+                kwargs['__args__'] = args
+            return handler(**kwargs)
+        set_handler(parser, wrapped)
+        return handler
+    return set_wrapped_handler
+
+
+# TODO pass `help` for each parser argument
+# TODO pass `help` (brief) for each parser/subparser
+# TODO pass `description` (full) for each parser/subparser
+
+
+parser = argparse.ArgumentParser(prog='ctx', allow_abbrev=False)
+parser.add_argument('-v', '--version', action='store_true')
+@handles(parser)
+def handle_parser(version):
+    if version:
+        print(__version__)
     else:
-        store = os.path.join(base, value)
+        _print_full_items()
+
+
+# TODO refactor subparsers into multiple groups, e.g. core, advanced, meta, etc.
+subparsers = parser.add_subparsers(title='commands')
+
+
+# TODO refactor `set-path` command into an option of `set`
+set_path_parser = subparsers.add_parser('set-path')
+set_path_parser.add_argument('key')
+set_path_parser.add_argument('value')
+@handles(set_path_parser)
+def handle_set_path(key, value):
+    base = os.getcwd()
+    value = base if value == '.' else os.path.join(base, value)
 
     if WINDOWS:
-        if ' ' in store:
+        if ' ' in value:
             # double-quote the path due to spaces
-            store = '"%s"' % store
+            value = '"%s"' % value
 
-    # rewrite for the log
-    cmd = 'set'
-    value = store
+    CTX[key] = (NOW, value)
 
-    cdict[key] = (now, store)
-    need_store = True
-
-    s = (style['key'],
+    s = (STYLE['key'],
          key,
-         color[''],
+         COLOR[''],
          '=',
-         style['value'],
-         store,
-         color[''],
+         STYLE['value'],
+         value,
+         COLOR[''],
          )
     print(''.join(s))
 
-elif cmd == 'get':
-    v = cdict[key][1]
-    s = (style['value'],
+    LOG.append(NOW, 'set', key, value)
+
+
+get_parser = subparsers.add_parser('get')
+get_parser.add_argument('key')
+@handles(get_parser)
+def handle_get(key):
+    v = CTX[key][1]
+    s = (STYLE['value'],
         v,
-        color[''],
+        COLOR[''],
         )
     print(''.join(s))
 
-elif cmd in ['shell', 'dryshell']:
-    # use the key as the command
-    # and the value as keys for the arguments
-    sh = cdict[key][1]
-    if value is None:
-        arg = ''
-    else:
-        args = [cdict[v][1] for v in value.split()]
-        arg = ' '.join(args)
 
-    sh_cmd = sh
-    if arg:
-        sh_cmd = sh_cmd + ' ' + arg
+shell_parser = subparsers.add_parser('shell')
+shell_parser.add_argument('cmd-key', metavar='command-key')
+shell_parser.add_argument('arg-keys', nargs='*', metavar='argument-keys')
+shell_parser.add_argument('-d', '--dry-run', action='store_true')
+shell_parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+@handles(shell_parser)
+def handle_shell(cmd_key, arg_keys, dry_run, verbose):
+    cmd = CTX[cmd_key][1]
+    args_ = [CTX[k][1] for k in arg_keys]
+    sh_cmd = f"{cmd} {' '.join(args_)}" if args_ else cmd
 
     s = ('shell command: ',
-        style['command'],
+        STYLE['command'],
         sh_cmd,
-        color[''],
+        COLOR[''],
         )
-    if verbose_flag:
-        print(''.join(s), file=sys.stderr)
+    if verbose:
+        print_err(''.join(s))
 
-    if cmd == 'shell':
-        os.system(sh_cmd)
-    else:
+    if dry_run:
         print('dryrun ' + ''.join(s))
+    else:
+        os.system(sh_cmd)
 
-elif cmd in ('exec', 'dryexec'):
+
+exec_parser = subparsers.add_parser('exec')
+exec_parser.add_argument('cmd-key', metavar='command-key')
+exec_parser.add_argument('args', nargs='*', metavar='arguments')
+exec_parser.add_argument('-d', '--dry-run', action='store_true')
+exec_parser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+@handles(exec_parser)
+def handle_exec(cmd_key, args, verbose, dry_run):
     import shlex
     import subprocess
 
-    sh = cdict[key][1]
-    args = shlex.split(sh)
-    args.extend(sys.argv[3:])
+    cmd = CTX[cmd_key][1]
+    sh_cmd = shlex.split(cmd)
+    sh_cmd.extend(args)
 
     s = ('exec command: ',
-        style['command'],
+        STYLE['command'],
         repr(args),
-        color[''],
+        COLOR[''],
         )
-    if verbose_flag:
+
+    if verbose:
         print(''.join(s), file=sys.stderr)
 
-    if cmd == 'exec':
-        proc = subprocess.Popen(args)
-        retcode = proc.wait()
-    else:
+    if dry_run:
         print('dryrun ' + ''.join(s))
+    else:
+        proc = subprocess.Popen(sh_cmd)
+        return proc.wait()
 
-elif cmd == '_pop':  # may remove
-    print(cdict[key][1], end='')
-    del cdict[key]
-    need_store = True
 
-elif cmd == 'set':
-    assert(value is not None)
-    cdict[key] = (now, value)
-    need_store = True
+pop_parser = subparsers.add_parser('pop')
+pop_parser.add_argument('key')
+@handles(pop_parser)
+def handle_pop(key):
+    print(CTX[key][1], end='')
+    del CTX[key]
 
-elif cmd == 'del':
-    del cdict[key]
-    if value:
-        # TODO: ensure all keys exist before
-        # for deleting multiple keys
-        for v in value.split():
-            del cdict[v]
-    need_store = True
 
-elif cmd == 'keys':
-    keys = sorted(cdict.keys())
+# TODO add `add` command (like set, except it errors out if the key already exists)
+# TODO add 'replace' command (like set, except it errors out if the key does not already exist)
+set_parser = subparsers.add_parser('set')
+set_parser.add_argument('key')
+set_parser.add_argument('value')
+@handles(set_parser)
+def handle_set(key, value):
+    CTX[key] = (NOW, value)
+
+
+# TODO add `force` option to `del` command
+del_parser = subparsers.add_parser('del')
+del_parser.add_argument('keys', nargs='+', metavar='key')
+@handles(del_parser)
+def handle_del(keys):
+    for key in keys:
+        if key not in CTX:
+            raise KeyError(key)
+
+    for key in keys:
+        del CTX[key]
+
+
+keys_parser = subparsers.add_parser('keys')
+@handles(keys_parser)
+def handle_keys():
+    keys = sorted(CTX.keys())
     for k in keys:
-        s = (style['key'],
+        s = (STYLE['key'],
             k,
-            color[''],
+            COLOR[''],
             )
         print(''.join(s))
 
-elif cmd == 'rename':
-    assert(len(value.split()) == 1)
-    v = cdict[key]
-    cdict[value] = v
-    del cdict[key]
-    need_store = True
 
-elif cmd == 'copy':
-    assert(len(value.split()) == 1)
-    v = cdict[key]
-    cdict[value] = (now, v[1])
-    need_store = True
+rename_parser = subparsers.add_parser('rename')
+rename_parser.add_argument('old-key')
+rename_parser.add_argument('new-key')
+@handles(rename_parser)
+def handle_rename(old_key, new_key):
+    CTX[new_key] = CTX[old_key]
+    del CTX[old_key]
 
-elif cmd == 'items':
+
+copy_parser = subparsers.add_parser('copy')
+copy_parser.add_argument('old-key')
+copy_parser.add_argument('new-key')
+@handles(copy_parser)
+def handle_copy(old_key, new_key):
+    CTX[new_key] = (NOW, CTX[old_key][1])
+
+
+items_parser = subparsers.add_parser('items')
+items_parser.add_argument('keys', nargs='*', metavar='key')
+@handles(items_parser)
+def handle_items(keys):
     # print out the items in creation order
     # if args, use args as keys
 
     # allow for `ctx items | ctx update -" to preserve time order
-    x = ' '.join(sys.argv[2:])
-    if x:
-        keys = x.split()
-        items = [
-            (cdict[k][0], k, cdict[k][1])
-            for k in keys
-            ]
+    if keys:
+        items = [(CTX[k][0], k, CTX[k][1]) for k in keys]
     else:
-        everything = [(v[0], k, v[1]) for k, v in cdict.items()]
+        everything = [(v[0], k, v[1]) for k, v in CTX.items()]
         items = sorted(everything)
 
     # make the output resemble `env`
-    for ctime, _key, _value in items:
-        s = (style['key'], _key, color[''], '=',
-             style['value'],
+    for _, _key, _value in items:
+        s = (STYLE['key'], _key, COLOR[''], '=',
+             STYLE['value'],
              _value,
-             color['']
+             COLOR['']
         )
         print(''.join(s))
 
-elif cmd == '_fullitems':
-    # timestamp, key, value
-    everything = [(v[0], k, v[1]) for k, v in cdict.items()]
-    x = sorted(everything, reverse=True)
-    s = ('Using context ', style['context'], name, color[''], '')
-    if env_name:
-        s = s + (' (set by CTX_NAME)', )
-    if ctx_home:
-        s = s + ((' (from CTX_HOME=%s)' % ctx_home),)
-    print(''.join(s))
-    s = ('There are ', style['value'], str(len(everything)),
-        color[''], ' entries.\n')
-    print(''.join(s))
 
-    for ctime, _key, _value in x:
-        value=str(value)
-        s = (style['time'],
-             ctime, '    ',
-             style['key'], _key,
-             color[''], ' = ',
-             style['value'], _value,
-             color['']
-             )
-        print(''.join(s))
-
-elif cmd == 'log':
-    log = load_log()
-    for x in log:
+log_parser = subparsers.add_parser('log')
+@handles(log_parser)
+def handle_log():
+    for x in LOG:
         print(x)
 
-elif cmd == 'switch':
-    if key is None:
+
+switch_parser = subparsers.add_parser('switch')
+switch_parser.add_argument('new-name', nargs='?', metavar='context')
+@handles(switch_parser)
+def handle_switch(new_name):
+    if new_name is None:
         # print all the context names
-        f = os.listdir(ctx)
+        f = os.listdir(CTX_HOME)
         ext = '.json'
         f = [i.rpartition(ext)[0] for i in f if i.endswith(ext)]
-        if name not in f:
-            f.append(name)
+        if CTX_NAME not in f:
+            f.append(CTX_NAME)
         for i in sorted(f):
-            if i == name:
-                s = (style['value'],
+            if i == CTX_NAME:
+                s = (STYLE['value'],
                      '* ',
                      i,
-                     color[''])
+                     COLOR[''])
             else:
                 s = ('  ', i)
-
             print(''.join(s))
-
-    elif env_name:
+    elif ENV_CTX_NAME:
         s = ('context set by CTX_NAME as ',
-             style['context'],
-             env_name,
-             color[''],
+             STYLE['context'],
+             ENV_CTX_NAME,
+             COLOR[''],
              '. Not switching.')
         print(''.join(s))
-
+    elif CTX_NAME != new_name:
+        s = ('switching to "',
+            STYLE['context'],
+            new_name,
+            COLOR[''],
+            '" from "',
+            STYLE['context'],
+            CTX_NAME,
+            COLOR[''],
+            '"',
+            )
+        print(''.join(s))
+        with open(CTX_NAME_FILE, 'w') as fid:
+            fid.write(new_name)
     else:
-        if name != key:
-            s = ('switching to "',
-                style['context'],
-                key,
-                color[''],
-                '" from "',
-                style['context'],
-                name,
-                color[''],
-                '"',
-                )
-            print(''.join(s))
-            # switch to the context, if available
-            with open(name_file, 'w') as fid:
-                fid.write(key)
-        else:
-            s = ('already on "',
-                style['context'],
-                key,
-                color[''],
-                '"',
-                )
-            print(''.join(s))
+        s = ('already on "',
+            STYLE['context'],
+            new_name,
+            COLOR[''],
+            '"',
+            )
+        print(''.join(s))
 
-elif cmd == 'import':
-    assert(key is not None)
+
+import_parser = subparsers.add_parser('import')
+import_parser.add_argument('env-key')  # TODO allow (and handle) multiple environment keys
+import_parser.add_argument('new-key', nargs='?')  # TODO refactor `new-key` argument into a formatting convention of each `env-key` argument (i.e. 'KEY[{=|:}NEWKEY])
+@handles(import_parser)
+def handle_import(env_key, new_key):
     missing = object()
-    env_value = os.environ.get(key, missing)
-    store_as = key
-    if value is not None:
-        if len(value.split()) == 1:
-            store_as = value
-        else:
-            raise ValueError('needs to be a single word')
+    env_value = os.environ.get(env_key, missing)
+    store_as = new_key if new_key else env_key
 
     if env_value is not missing:
-        cdict[store_as] = (now, env_value)
-        need_store = True
+        CTX[store_as] = (NOW, env_value)
 
-elif cmd == 'update':
+
+# TODO refactor `update` command into option of `set`
+update_parser = subparsers.add_parser('update')
+update_parser.add_argument('fid', type=argparse.FileType(), metavar='file')
+@handles(update_parser)
+def handle_update(fid):
     # update the keys with the given file of key=value lines
     # example: $ env | ctx update -
     # the "items" command can be used to bulk transfer key-values
     #   ctx items > kv.txt
     #   ctx switch new_env
     #   ctx update kv.txt
-    assert(key is not None)
-    assert(value is None)
-    # key is a file, - for stdin. readlines,
-    if key == '-':
-        fid = sys.stdin
-    else:
-        fid = open(key, 'r')
-
     # process the lines
     d = {}
-    now2 = now
-    for line in fid.readlines():
-        _key, eq, _value = line.partition('=')
-        _value = _value.rstrip() # strip newline
-        d[_key] = (now2, _value)
-        log_extra.append((now2, 'update_set', _key, _value))
+    now2 = NOW
 
-        while True:  # ensure unique now
-            _now2 = get_now()
-            if _now2 != now2:
-                now2 = _now2
-                break
+    with fid:
+        for line in fid.readlines():
+            _key, eq, _value = line.partition('=')
+            _value = _value.rstrip() # strip newline
+            d[_key] = (now2, _value)
+            LOG.append((now2, 'update_set', _key, _value))
 
-    fid.close()
+            while True:  # ensure unique now
+                _now2 = get_now()
+                if _now2 != now2:
+                    now2 = _now2
+                    break
+
     # update if no error occurs
-    cdict.update(d)
-    need_store = True
+    CTX.update(d)
 
-elif cmd == 'clear':
-    # require clear to have the key as a failsafe
-    assert(key == name)
-    cdict.clear()
-    need_store = True
 
-elif cmd == '_delctx':
-    assert(key is not None)
-    assert(value is None)
-    _ctx_file = os.path.join(ctx, key + '.json')
-    _log_file = os.path.join(ctx, key + '.log')
+clear_parser = subparsers.add_parser('clear')
+clear_parser.add_argument('name', choices=[CTX_NAME], metavar='context')  # name of current context required as a failsafe
+@handles(clear_parser)
+def handle_clear(name):
+    assert name == CTX_NAME
+    CTX.clear()
+
+
+# TODO refactor `del-ctx` command into an option of `del`
+del_ctx_parser = subparsers.add_parser('del-ctx')
+del_ctx_parser.add_argument('name', metavar='context')
+@handles(del_ctx_parser)
+def handle_del_ctx(name):
+    _ctx_file = os.path.join(CTX_HOME, name + '.json')
+    _log_file = os.path.join(CTX_HOME, name + '.log')
     if os.path.exists(_ctx_file):
         os.remove(_ctx_file)
     if os.path.exists(_log_file):
         os.remove(_log_file)
 
-elif cmd == '_copyctx':
-    assert(key is not None)
-    assert(value is not None)
-    assert(len(value.split()) == 1)
-    _ctx_file = os.path.join(ctx, key + '.json')
-    _log_file = os.path.join(ctx, key + '.log')
 
-    _ctx_file2 = os.path.join(ctx, value + '.json')
-    _log_file2 = os.path.join(ctx, value + '.log')
+# TODO refactor `copy-ctx` command into an option of `copy`
+copy_ctx_parser = subparsers.add_parser('copy-ctx')
+copy_ctx_parser.add_argument('old-name', metavar='context')
+copy_ctx_parser.add_argument('new-name', metavar='new-context')
+@handles(copy_ctx_parser)
+def handle_copy_ctx(old_name, new_name):
+    _ctx_file = os.path.join(CTX_HOME, old_name + '.json')
+    _log_file = os.path.join(CTX_HOME, old_name + '.log')
 
-    assert(not os.path.exists(_ctx_file2))
-    assert(not os.path.exists(_log_file2))
+    _ctx_file2 = os.path.join(CTX_HOME, new_name + '.json')
+    _log_file2 = os.path.join(CTX_HOME, new_name + '.log')
+
+    if os.path.exists(_ctx_file2):
+        raise FileExistsError(_ctx_file2)
+    if os.path.exists(_log_file2):
+        raise FileExistsError(_ctx_file2)
 
     import shutil
     shutil.copy(_ctx_file, _ctx_file2)
     shutil.copy(_log_file, _log_file2)
 
 
-elif cmd == 'version':
+version_parser = subparsers.add_parser('version')
+@handles(version_parser)
+def handle_version():
     _print_version()
 
-elif cmd == 'entry':
-    # auto-increment the maximum suffix for a key
-    assert(key is not None)
-    assert(value is not None)
+
+# TODO refactor `entry` command into an option of `set`
+entry_parser = subparsers.add_parser('entry')
+entry_parser.add_argument('key')
+entry_parser.add_argument('value')
+@handles(entry_parser)
+def handle_entry(key, value):
+    """auto-increment the maximum suffix for a key"""
     # use key as a prefix
     prefix = key + '_'
     N = len(prefix)
-    keys = list(cdict.keys())
+    keys = list(CTX.keys())
     suffix = [i[N:] for i in keys if i.startswith(prefix)]
 
     nums = []
@@ -518,79 +647,56 @@ elif cmd == 'entry':
             nums.append(int(n))
         except:
             pass
-
     if not nums:
         nums.append(0)
-
     next_num = max(nums) + 1
 
     key = prefix + ('%03i' % next_num)
-    assert(key not in cdict)  # must be new key
+    assert(key not in CTX)  # must be new key
 
-    cdict[key] = (now, value)
+    CTX[key] = (NOW, value)
 
-    need_store = True
-
-    s = (style['key'],
+    s = (STYLE['key'],
          key,
-         color[''],
+         COLOR[''],
          '=',
-         style['value'],
+         STYLE['value'],
          value,
-         color[''],
+         COLOR[''],
          )
     print(''.join(s))
 
-elif cmd == 'now':
+
+now_parser = subparsers.add_parser('now')
+@handles(now_parser)
+def handle_now():
     # useful for appending to file names
     # make the time filesystem-safe and still iso8601 compliant
-    n = now.replace(':', '')
+    n = NOW.replace(':', '')
     print(n)
 
 
-elif cmd == '_dict':
-    print(ctx_file)
-
-elif cmd == '_download':
-    # print out the download command, if running directly
-    sh_cmd = ('curl '
-              'https://raw.githubusercontent.com/serwy/shellctx/latest/shellctx/ctx.py',
-              ' -o ',
-              sys.argv[0]
-              )
-    if __name__ == '__main__':
-        print(''.join(sh_cmd))
-    else:
-        s = ('running as a module ',
-             color['red'],
-             __name__,
-             color[''],
-             '\n',
-             'from "%s"' % __file__,
-             '\n'
-             )
-        print(''.join(s), file=sys.stderr)
+dict_parser = subparsers.add_parser('dict')
+@handles(dict_parser)
+def handle_dict():
+    print(CTX_FILE)
 
 
-elif cmd in ['help', '-h']:
-    print('get set del shell exec items copy rename '
-          'keys switch version log entry now')
+def main(argv=sys.argv[1:]):
+    args = parser.parse_args(argv)
 
-else:
-    s = ('command not recognized: ', color['red'], cmd, color[''])
-    print(''.join(s))
+    if ENV_CTX_VERBOSE == 1:
+        _print_verbose()
+    elif ENV_CTX_VERBOSE > 1:
+        _print_debug(args)
+
+    os.makedirs(CTX_HOME, exist_ok=True)
+    retcode = handle(args) or 0
+
+    LOG.save()
+    CTX.save()
+    parser.exit(retcode)
 
 
-if need_store:
-    with open(ctx_file, 'wb') as fid:
-        fid.write(json.dumps(cdict, indent=4).encode('utf8'))
-
-    log = load_log()
-    log.append((now, cmd, key, value))
-    if log_extra:
-        log.extend(log_extra)
-
-    with open(log_file, 'wb') as fid:
-        fid.write(json.dumps(log, indent=4).encode('utf8'))
-
-sys.exit(retcode)
+if __name__.endswith('__main__'):
+    main()

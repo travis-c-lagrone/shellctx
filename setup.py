@@ -19,7 +19,7 @@ setup(name='shellctx',
       package_data = {},
       include_package_data=False,
       entry_points=dict(
-          console_scripts=['ctx=shellctx.ctx']
+          console_scripts=['ctx=shellctx.ctx:main']
       ),
       license='GNU GPLv3',
       long_description=LONG_DESCRIPTION,
