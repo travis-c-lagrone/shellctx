@@ -395,6 +395,25 @@ def handle_del(keys, pop, verbose):
         popped_keys.add(key)
 
 
+subparser = subparsers.add_parser('copy')
+subparser.add_argument('old-key')
+subparser.add_argument('new-key')
+@handles(subparser)
+def handle_copy(old_key, new_key):
+    LOG.append(NOW, 'copy', old_key, new_key)
+    CTX[new_key] = (NOW, CTX[old_key][1])
+
+
+subparser = subparsers.add_parser('rename')
+subparser.add_argument('old-key')
+subparser.add_argument('new-key')
+@handles(subparser)
+def handle_rename(old_key, new_key):
+    LOG.append(NOW, 'rename', old_key, new_key)
+    CTX[new_key] = CTX[old_key]
+    del CTX[old_key]
+
+
 def _get_contexts(include_default=True):
     files = os.listdir(CTX_HOME)
     ext = '.json'
@@ -474,6 +493,32 @@ def handle_del_ctx(name):
         _set_ctx(DEFAULT_CTX_NAME)
 
 
+subparser = subparsers.add_parser('copy-ctx')
+subparser.add_argument('old-name')
+subparser.add_argument('new-name')
+subparser.add_argument('--force', action='store_true')
+@handles(subparser)
+def handle_copy_ctx(old_name, new_name, force):
+    old_ctx_file = os.path.join(CTX_HOME, old_name + '.json')
+    old_log_file = os.path.join(CTX_HOME, old_name + '.log')
+
+    new_ctx_file = os.path.join(CTX_HOME, new_name + '.json')
+    new_log_file = os.path.join(CTX_HOME, new_name + '.log')
+
+    if not force:
+        if os.path.exists(new_ctx_file):
+            raise FileExistsError(new_ctx_file)
+        if os.path.exists(new_log_file):
+            raise FileExistsError(new_log_file)
+
+    import shutil
+    shutil.copy(old_ctx_file, new_ctx_file)
+    shutil.copy(old_log_file, new_log_file)
+
+
+# TODO add parser for `rename-ctx`
+
+
 subparser = subparsers.add_parser('shell')
 subparser.add_argument('cmd-key', metavar='command-key')
 subparser.add_argument('arg-keys', nargs='*', metavar='argument-keys')
@@ -541,23 +586,6 @@ def handle_keys():
         print(''.join(s))
 
 
-subparser = subparsers.add_parser('rename')
-subparser.add_argument('old-key')
-subparser.add_argument('new-key')
-@handles(subparser)
-def handle_rename(old_key, new_key):
-    CTX[new_key] = CTX[old_key]
-    del CTX[old_key]
-
-
-subparser = subparsers.add_parser('copy')
-subparser.add_argument('old-key')
-subparser.add_argument('new-key')
-@handles(subparser)
-def handle_copy(old_key, new_key):
-    CTX[new_key] = (NOW, CTX[old_key][1])
-
-
 subparser = subparsers.add_parser('items')
 subparser.add_argument('keys', nargs='*', metavar='key')
 @handles(subparser)
@@ -602,7 +630,6 @@ def handle_import(env_key, new_key):
         CTX[store_as] = (NOW, env_value)
 
 
-# TODO refactor `update` command into option of `set`
 subparser = subparsers.add_parser('update')
 subparser.add_argument('fid', type=argparse.FileType(), metavar='file')
 @handles(subparser)
@@ -640,28 +667,6 @@ subparser.add_argument('name', choices=[CTX_NAME], metavar='name')  # name of cu
 def handle_clear(name):
     assert name == CTX_NAME
     CTX.clear()
-
-
-# TODO refactor `copy-ctx` command into an option of `copy`
-subparser = subparsers.add_parser('copy-ctx')
-subparser.add_argument('old-name', metavar='context')
-subparser.add_argument('new-name', metavar='new-context')
-@handles(subparser)
-def handle_copy_ctx(old_name, new_name):
-    _ctx_file = os.path.join(CTX_HOME, old_name + '.json')
-    _log_file = os.path.join(CTX_HOME, old_name + '.log')
-
-    _ctx_file2 = os.path.join(CTX_HOME, new_name + '.json')
-    _log_file2 = os.path.join(CTX_HOME, new_name + '.log')
-
-    if os.path.exists(_ctx_file2):
-        raise FileExistsError(_ctx_file2)
-    if os.path.exists(_log_file2):
-        raise FileExistsError(_ctx_file2)
-
-    import shutil
-    shutil.copy(_ctx_file, _ctx_file2)
-    shutil.copy(_log_file, _log_file2)
 
 
 subparser = subparsers.add_parser('version')
