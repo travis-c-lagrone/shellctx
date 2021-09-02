@@ -516,7 +516,31 @@ def handle_copy_ctx(old_name, new_name, force):
     shutil.copy(old_log_file, new_log_file)
 
 
-# TODO add parser for `rename-ctx`
+subparser = subparsers.add_parser('rename-ctx')
+subparser.add_argument('old-name')
+subparser.add_argument('new-name')
+subparser.add_argument('--force', action='store_true')
+@handles(subparser)
+def handle_rename_ctx(old_name, new_name, force):
+    old_ctx_file = os.path.join(CTX_HOME, old_name + '.json')
+    old_log_file = os.path.join(CTX_HOME, old_name + '.log')
+
+    new_ctx_file = os.path.join(CTX_HOME, new_name + '.json')
+    new_log_file = os.path.join(CTX_HOME, new_name + '.log')
+
+    if os.path.exists(new_ctx_file):
+        if force:
+            os.remove(new_ctx_file)
+        else:
+            raise FileExistsError(new_ctx_file)
+    if os.path.exists(new_log_file):
+        if force:
+            os.remove(new_log_file)
+        else:
+            raise FileExistsError(new_log_file)
+
+    os.rename(old_ctx_file, new_ctx_file)
+    os.rename(old_log_file, new_log_file)
 
 
 subparser = subparsers.add_parser('shell')
