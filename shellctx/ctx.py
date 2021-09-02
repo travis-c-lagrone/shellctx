@@ -708,16 +708,6 @@ def handle_entry(key, value):
     print(''.join(s))
 
 
-cmd = 'now'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-@handles(subparsers[cmd])
-def handle_now():
-    # useful for appending to file names
-    # make the time filesystem-safe and still iso8601 compliant
-    n = NOW.replace(':', '')
-    print(n)
-
-
 cmd = 'dict'
 subparsers[cmd] = subparser_group.add_parser(cmd)
 @handles(subparsers[cmd])
