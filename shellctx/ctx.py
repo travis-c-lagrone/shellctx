@@ -378,6 +378,11 @@ def handle_del(keys, pop, verbose):
         popped_keys.add(key)
 
 
+def _set_ctx(name):
+    with open(CTX_NAME_FILE, 'w') as fid:
+        fid.write(name)
+
+
 cmd = 'set-ctx'
 subparsers[cmd] = subparser_group.add_parser(cmd)
 subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
@@ -396,8 +401,7 @@ def handle_set_ctx(name, verbose):
         return 1
 
     if name != CTX_NAME:
-        with open(CTX_NAME_FILE, 'w') as fid:
-            fid.write(name)
+        _set_ctx(name)
 
     if verbose:
         print(''.join(('switching to "',
@@ -412,21 +416,48 @@ def handle_set_ctx(name, verbose):
         )))
 
 
+def _get_contexts(include_default=True):
+    files = os.listdir(CTX_HOME)
+    ext = '.json'
+    names = [f.rpartition(ext)[0] for f in files if f.endswith(ext)]
+    if CTX_NAME not in names:
+        names.append(CTX_NAME)
+    if not include_default:
+        try:
+            names.remove(DEFAULT_CTX_NAME)
+        except:
+            pass
+    names.sort()
+    return names
+
+
 cmd = 'get-ctx'
 subparsers[cmd] = subparser_group.add_parser(cmd)
 subparsers[cmd].add_argument('-a', '--all', action='store_true')
 @handles(subparsers[cmd])
 def handle_get_ctx(all):
     if all:
-        files = os.listdir(CTX_HOME)
-        ext = '.json'
-        names = [f.rpartition(ext)[0] for f in files if f.endswith(ext)]
-        if CTX_NAME not in names:
-            files.append(CTX_NAME)
-        for name in sorted(names):
+        for name in _get_contexts():
             print(name)
     else:
         print(CTX_NAME)
+
+
+cmd = 'del-ctx'
+subparsers[cmd] = subparser_group.add_parser(cmd)
+subparsers[cmd].add_argument('name', choices=_get_contexts(include_default=False))
+@handles(subparsers[cmd])
+def handle_del_ctx(name):
+    ctx_file = os.path.join(CTX_HOME, name + '.json')
+    if os.path.exists(ctx_file):
+        os.remove(ctx_file)
+
+    log_file = os.path.join(CTX_HOME, name + '.log')
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
+    if name == CTX_NAME:
+        _set_ctx(DEFAULT_CTX_NAME)
 
 
 cmd = 'shell'
@@ -600,25 +631,11 @@ def handle_update(fid):
 
 cmd = 'clear'
 subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('name', choices=[CTX_NAME], metavar='context')  # name of current context required as a failsafe
+subparsers[cmd].add_argument('name', choices=[CTX_NAME], metavar='name')  # name of current context required as a failsafe
 @handles(subparsers[cmd])
 def handle_clear(name):
     assert name == CTX_NAME
     CTX.clear()
-
-
-# TODO refactor `del-ctx` command into an option of `del`
-cmd = 'del-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('name', metavar='context')
-@handles(subparsers[cmd])
-def handle_del_ctx(name):
-    _ctx_file = os.path.join(CTX_HOME, name + '.json')
-    _log_file = os.path.join(CTX_HOME, name + '.log')
-    if os.path.exists(_ctx_file):
-        os.remove(_ctx_file)
-    if os.path.exists(_log_file):
-        os.remove(_log_file)
 
 
 # TODO refactor `copy-ctx` command into an option of `copy`
