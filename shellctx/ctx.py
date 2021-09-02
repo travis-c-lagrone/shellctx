@@ -314,11 +314,30 @@ def handle_get(key):
 # TODO add 'replace' command (like set, except it errors out if the key does not already exist)
 cmd = 'set'
 subparsers[cmd] = subparser_group.add_parser(cmd)
+subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
 subparsers[cmd].add_argument('key')
 subparsers[cmd].add_argument('value')
+group = subparsers[cmd].add_argument_group('value options')
+group.add_argument('-p', '--path', action='store_true')
 @handles(subparsers[cmd])
-def handle_set(key, value):
+def handle_set(key, value, path, verbose):
+    if path:
+        base = os.getcwd()
+        value = base if value == '.' else os.path.join(base, value)
+
+    LOG.append(NOW, 'set', key, value)
     CTX[key] = (NOW, value)
+
+    if verbose:
+        print(''.join((
+            STYLE['key'],
+            key,
+            COLOR[''],
+            '=',
+            STYLE['value'],
+            value,
+            COLOR['']
+        )))
 
 
 # TODO add `force` option to `del` command
@@ -384,36 +403,6 @@ def handle_switch(new_name):
             '"',
             )
         print(''.join(s))
-
-
-# TODO refactor `set-path` command into an option of `set`
-cmd = 'set-path'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('key')
-subparsers[cmd].add_argument('value')
-@handles(subparsers[cmd])
-def handle_set_path(key, value):
-    base = os.getcwd()
-    value = base if value == '.' else os.path.join(base, value)
-
-    if WINDOWS:
-        if ' ' in value:
-            # double-quote the path due to spaces
-            value = '"%s"' % value
-
-    CTX[key] = (NOW, value)
-
-    s = (STYLE['key'],
-         key,
-         COLOR[''],
-         '=',
-         STYLE['value'],
-         value,
-         COLOR[''],
-         )
-    print(''.join(s))
-
-    LOG.append(NOW, 'set', key, value)
 
 
 cmd = 'shell'
