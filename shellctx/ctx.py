@@ -343,14 +343,37 @@ def handle_set(key, value, path, verbose):
 # TODO add `force` option to `del` command
 cmd = 'del'
 subparsers[cmd] = subparser_group.add_parser(cmd)
+subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
 subparsers[cmd].add_argument('keys', nargs='+', metavar='key')
+subparsers[cmd].add_argument('-p', '--pop', action='store_true')
 @handles(subparsers[cmd])
-def handle_del(keys):
+def handle_del(keys, pop, verbose):
     for key in keys:
         if key not in CTX:
             raise KeyError(key)
+
+    popped_keys = set()
     for key in keys:
+        if key in popped_keys:
+            continue
+
+        value = CTX[key][1]
+
+        LOG.append(NOW, 'del', key, value)
         del CTX[key]
+
+        if pop:
+            print(value)
+
+        if verbose:
+            print(''.join((
+                STYLE['key'],
+                key,
+                STYLE[''],
+                '=',
+            )))
+
+        popped_keys.add(key)
 
 
 cmd = 'switch'
@@ -460,15 +483,6 @@ def handle_exec(cmd_key, args, verbose, dry_run):
     else:
         proc = subprocess.Popen(sh_cmd)
         return proc.wait()
-
-
-cmd = 'pop'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('key')
-@handles(subparsers[cmd])
-def handle_pop(key):
-    print(CTX[key][1], end='')
-    del CTX[key]
 
 
 cmd = 'keys'
