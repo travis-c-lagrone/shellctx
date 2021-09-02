@@ -58,13 +58,15 @@ ENV_CTX_VERBOSE = int(os.environ.get('CTX_VERBOSE', 0))
 CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
 CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
 
-CTX_NAME = 'main'
+DEFAULT_CTX_NAME = 'main'
 
 if ENV_CTX_NAME:
     CTX_NAME = ENV_CTX_NAME
 elif os.path.exists(CTX_NAME_FILE):
     with open(CTX_NAME_FILE, 'r') as _fid:
         CTX_NAME = _fid.read().strip()
+else:
+    CTX_NAME = DEFAULT_CTX_NAME
 
 CTX_FILE = os.path.join(CTX_HOME, CTX_NAME + '.json')
 LOG_FILE = os.path.join(CTX_HOME, CTX_NAME + '.log')
@@ -376,56 +378,55 @@ def handle_del(keys, pop, verbose):
         popped_keys.add(key)
 
 
-cmd = 'switch'
+cmd = 'set-ctx'
 subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('new-name', nargs='?', metavar='context')
+subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+subparsers[cmd].add_argument('name', nargs='?', default=DEFAULT_CTX_NAME)
 @handles(subparsers[cmd])
-def handle_switch(new_name):
-    if new_name is None:
-        # print all the context names
-        f = os.listdir(CTX_HOME)
-        ext = '.json'
-        f = [i.rpartition(ext)[0] for i in f if i.endswith(ext)]
-        if CTX_NAME not in f:
-            f.append(CTX_NAME)
-        for i in sorted(f):
-            if i == CTX_NAME:
-                s = (STYLE['value'],
-                     '* ',
-                     i,
-                     COLOR[''])
-            else:
-                s = ('  ', i)
-            print(''.join(s))
-    elif ENV_CTX_NAME:
-        s = ('context set by CTX_NAME as ',
-             STYLE['context'],
-             ENV_CTX_NAME,
-             COLOR[''],
-             '. Not switching.')
-        print(''.join(s))
-    elif CTX_NAME != new_name:
-        s = ('switching to "',
+def handle_set_ctx(name, verbose):
+    if ENV_CTX_NAME and name != ENV_CTX_NAME:
+        print_err(''.join((
+            COLOR['red'],
+            'context set by CTX_NAME as ',
             STYLE['context'],
-            new_name,
+            ENV_CTX_NAME,
+            COLOR['red'],
+            '. Not switching.',
+        )))
+        return 1
+
+    if name != CTX_NAME:
+        with open(CTX_NAME_FILE, 'w') as fid:
+            fid.write(name)
+
+    if verbose:
+        print(''.join(('switching to "',
+            STYLE['context'],
+            name,
             COLOR[''],
             '" from "',
             STYLE['context'],
             CTX_NAME,
             COLOR[''],
             '"',
-            )
-        print(''.join(s))
-        with open(CTX_NAME_FILE, 'w') as fid:
-            fid.write(new_name)
+        )))
+
+
+cmd = 'get-ctx'
+subparsers[cmd] = subparser_group.add_parser(cmd)
+subparsers[cmd].add_argument('-a', '--all', action='store_true')
+@handles(subparsers[cmd])
+def handle_get_ctx(all):
+    if all:
+        files = os.listdir(CTX_HOME)
+        ext = '.json'
+        names = [f.rpartition(ext)[0] for f in files if f.endswith(ext)]
+        if CTX_NAME not in names:
+            files.append(CTX_NAME)
+        for name in sorted(names):
+            print(name)
     else:
-        s = ('already on "',
-            STYLE['context'],
-            new_name,
-            COLOR[''],
-            '"',
-            )
-        print(''.join(s))
+        print(CTX_NAME)
 
 
 cmd = 'shell'
