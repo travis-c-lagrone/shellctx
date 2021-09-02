@@ -319,13 +319,32 @@ subparsers[cmd] = subparser_group.add_parser(cmd)
 subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
 subparsers[cmd].add_argument('key')
 subparsers[cmd].add_argument('value')
-group = subparsers[cmd].add_argument_group('value options')
-group.add_argument('-p', '--path', action='store_true')
+subparsers[cmd].add_argument('-e', '--entry', action='store_true')
+subparsers[cmd].add_argument('-p', '--path', action='store_true')
 @handles(subparsers[cmd])
-def handle_set(key, value, path, verbose):
+def handle_set(key, value, entry, path, verbose):
     if path:
         base = os.getcwd()
         value = base if value == '.' else os.path.join(base, value)
+
+    if entry:
+        prefix = key + '_'
+        N = len(prefix)
+        keys = list(CTX.keys())
+        suffix = [k[N:] for k in keys if k.startswith(prefix)]
+
+        max_num = 0
+        for num in suffix:
+            try:
+                num = int(num)
+            except:
+                pass
+            else:
+                max_num = max(num, max_num)
+        next_num = max_num + 1
+
+        key = prefix + ('%03i' % next_num)
+        assert(key not in CTX)
 
     LOG.append(NOW, 'set', key, value)
     CTX[key] = (NOW, value)
@@ -666,46 +685,6 @@ subparsers[cmd] = subparser_group.add_parser(cmd)
 @handles(subparsers[cmd])
 def handle_version():
     _print_version()
-
-
-# TODO refactor `entry` command into an option of `set`
-cmd = 'entry'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('key')
-subparsers[cmd].add_argument('value')
-@handles(subparsers[cmd])
-def handle_entry(key, value):
-    """auto-increment the maximum suffix for a key"""
-    # use key as a prefix
-    prefix = key + '_'
-    N = len(prefix)
-    keys = list(CTX.keys())
-    suffix = [i[N:] for i in keys if i.startswith(prefix)]
-
-    nums = []
-    for n in suffix:
-        try:
-            nums.append(int(n))
-        except:
-            pass
-    if not nums:
-        nums.append(0)
-    next_num = max(nums) + 1
-
-    key = prefix + ('%03i' % next_num)
-    assert(key not in CTX)  # must be new key
-
-    CTX[key] = (NOW, value)
-
-    s = (STYLE['key'],
-         key,
-         COLOR[''],
-         '=',
-         STYLE['value'],
-         value,
-         COLOR[''],
-         )
-    print(''.join(s))
 
 
 cmd = 'dict'
