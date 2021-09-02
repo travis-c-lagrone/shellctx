@@ -286,7 +286,7 @@ def handles(parser):
 
 
 parser = argparse.ArgumentParser(prog='ctx', allow_abbrev=False)
-parser.add_argument('-v', '--version', action='store_true')
+parser.add_argument('--version', action='store_true')
 @handles(parser)
 def handle_(version):
     if version:
@@ -295,14 +295,14 @@ def handle_(version):
         _print_full_items()
 
 
-subparsers: dict[str, argparse.ArgumentParser] = {}
-subparser_group = parser.add_subparsers(title='commands')
+subparsers = parser.add_subparsers(title='commands')
+type(subparsers).__getitem__ = lambda self, key: self._name_parser_map[key]
+type(subparsers).keys = lambda self: self._name_parser_map.keys()
 
 
-cmd = 'get'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('key')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('get')
+subparser.add_argument('key')
+@handles(subparser)
 def handle_get(key):
     v = CTX[key][1]
     s = (STYLE['value'],
@@ -314,14 +314,13 @@ def handle_get(key):
 
 # TODO add `add` command (like set, except it errors out if the key already exists)
 # TODO add 'replace' command (like set, except it errors out if the key does not already exist)
-cmd = 'set'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
-subparsers[cmd].add_argument('key')
-subparsers[cmd].add_argument('value')
-subparsers[cmd].add_argument('-e', '--entry', action='store_true')
-subparsers[cmd].add_argument('-p', '--path', action='store_true')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('set')
+subparser.add_argument('key')
+subparser.add_argument('value')
+subparser.add_argument('-e', '--entry', action='store_true')
+subparser.add_argument('-p', '--path', action='store_true')
+subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+@handles(subparser)
 def handle_set(key, value, entry, path, verbose):
     if path:
         base = os.getcwd()
@@ -362,12 +361,11 @@ def handle_set(key, value, entry, path, verbose):
 
 
 # TODO add `force` option to `del` command
-cmd = 'del'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
-subparsers[cmd].add_argument('keys', nargs='+', metavar='key')
-subparsers[cmd].add_argument('-p', '--pop', action='store_true')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('del')
+subparser.add_argument('keys', nargs='+', metavar='key')
+subparser.add_argument('-p', '--pop', action='store_true')
+subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+@handles(subparser)
 def handle_del(keys, pop, verbose):
     for key in keys:
         if key not in CTX:
@@ -412,10 +410,9 @@ def _get_contexts(include_default=True):
     return names
 
 
-cmd = 'get-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('-a', '--all', action='store_true')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('get-ctx')
+subparser.add_argument('-a', '--all', action='store_true')
+@handles(subparser)
 def handle_get_ctx(all):
     if all:
         for name in _get_contexts():
@@ -429,11 +426,10 @@ def _set_ctx(name):
         fid.write(name)
 
 
-cmd = 'set-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
-subparsers[cmd].add_argument('name', nargs='?', default=DEFAULT_CTX_NAME)
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('set-ctx')
+subparser.add_argument('name', nargs='?', default=DEFAULT_CTX_NAME)
+subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+@handles(subparser)
 def handle_set_ctx(name, verbose):
     if ENV_CTX_NAME and name != ENV_CTX_NAME:
         print_err(''.join((
@@ -462,10 +458,9 @@ def handle_set_ctx(name, verbose):
         )))
 
 
-cmd = 'del-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('name', choices=_get_contexts(include_default=False))
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('del-ctx')
+subparser.add_argument('name', choices=_get_contexts(include_default=False))
+@handles(subparser)
 def handle_del_ctx(name):
     ctx_file = os.path.join(CTX_HOME, name + '.json')
     if os.path.exists(ctx_file):
@@ -479,13 +474,12 @@ def handle_del_ctx(name):
         _set_ctx(DEFAULT_CTX_NAME)
 
 
-cmd = 'shell'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('cmd-key', metavar='command-key')
-subparsers[cmd].add_argument('arg-keys', nargs='*', metavar='argument-keys')
-subparsers[cmd].add_argument('-d', '--dry-run', action='store_true')
-subparsers[cmd].add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('shell')
+subparser.add_argument('cmd-key', metavar='command-key')
+subparser.add_argument('arg-keys', nargs='*', metavar='argument-keys')
+subparser.add_argument('-d', '--dry-run', action='store_true')
+subparser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+@handles(subparser)
 def handle_shell(cmd_key, arg_keys, dry_run, verbose):
     cmd = CTX[cmd_key][1]
     args_ = [CTX[k][1] for k in arg_keys]
@@ -505,13 +499,12 @@ def handle_shell(cmd_key, arg_keys, dry_run, verbose):
         os.system(sh_cmd)
 
 
-cmd = 'exec'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('cmd-key', metavar='command-key')
-subparsers[cmd].add_argument('args', nargs='*', metavar='arguments')
-subparsers[cmd].add_argument('-d', '--dry-run', action='store_true')
-subparsers[cmd].add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('exec')
+subparser.add_argument('cmd-key', metavar='command-key')
+subparser.add_argument('args', nargs='*', metavar='arguments')
+subparser.add_argument('-d', '--dry-run', action='store_true')
+subparser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+@handles(subparser)
 def handle_exec(cmd_key, args, verbose, dry_run):
     import shlex
     import subprocess
@@ -536,9 +529,8 @@ def handle_exec(cmd_key, args, verbose, dry_run):
         return proc.wait()
 
 
-cmd = 'keys'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('keys')
+@handles(subparser)
 def handle_keys():
     keys = sorted(CTX.keys())
     for k in keys:
@@ -549,29 +541,26 @@ def handle_keys():
         print(''.join(s))
 
 
-cmd = 'rename'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('old-key')
-subparsers[cmd].add_argument('new-key')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('rename')
+subparser.add_argument('old-key')
+subparser.add_argument('new-key')
+@handles(subparser)
 def handle_rename(old_key, new_key):
     CTX[new_key] = CTX[old_key]
     del CTX[old_key]
 
 
-cmd = 'copy'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('old-key')
-subparsers[cmd].add_argument('new-key')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('copy')
+subparser.add_argument('old-key')
+subparser.add_argument('new-key')
+@handles(subparser)
 def handle_copy(old_key, new_key):
     CTX[new_key] = (NOW, CTX[old_key][1])
 
 
-cmd = 'items'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('keys', nargs='*', metavar='key')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('items')
+subparser.add_argument('keys', nargs='*', metavar='key')
+@handles(subparser)
 def handle_items(keys):
     # print out the items in creation order
     # if args, use args as keys
@@ -593,19 +582,17 @@ def handle_items(keys):
         print(''.join(s))
 
 
-cmd = 'log'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('log')
+@handles(subparser)
 def handle_log():
     for x in LOG:
         print(x)
 
 
-cmd = 'import'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('env-key')  # TODO allow (and handle) multiple environment keys
-subparsers[cmd].add_argument('new-key', nargs='?')  # TODO refactor `new-key` argument into a formatting convention of each `env-key` argument (i.e. 'KEY[{=|:}NEWKEY])
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('import')
+subparser.add_argument('env-key')  # TODO allow (and handle) multiple environment keys
+subparser.add_argument('new-key', nargs='?')  # TODO refactor `new-key` argument into a formatting convention of each `env-key` argument (i.e. 'KEY[{=|:}NEWKEY])
+@handles(subparser)
 def handle_import(env_key, new_key):
     missing = object()
     env_value = os.environ.get(env_key, missing)
@@ -616,10 +603,9 @@ def handle_import(env_key, new_key):
 
 
 # TODO refactor `update` command into option of `set`
-cmd = 'update'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('fid', type=argparse.FileType(), metavar='file')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('update')
+subparser.add_argument('fid', type=argparse.FileType(), metavar='file')
+@handles(subparser)
 def handle_update(fid):
     # update the keys with the given file of key=value lines
     # example: $ env | ctx update -
@@ -648,21 +634,19 @@ def handle_update(fid):
     CTX.update(d)
 
 
-cmd = 'clear'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('name', choices=[CTX_NAME], metavar='name')  # name of current context required as a failsafe
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('clear')
+subparser.add_argument('name', choices=[CTX_NAME], metavar='name')  # name of current context required as a failsafe
+@handles(subparser)
 def handle_clear(name):
     assert name == CTX_NAME
     CTX.clear()
 
 
 # TODO refactor `copy-ctx` command into an option of `copy`
-cmd = 'copy-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('old-name', metavar='context')
-subparsers[cmd].add_argument('new-name', metavar='new-context')
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('copy-ctx')
+subparser.add_argument('old-name', metavar='context')
+subparser.add_argument('new-name', metavar='new-context')
+@handles(subparser)
 def handle_copy_ctx(old_name, new_name):
     _ctx_file = os.path.join(CTX_HOME, old_name + '.json')
     _log_file = os.path.join(CTX_HOME, old_name + '.log')
@@ -680,24 +664,21 @@ def handle_copy_ctx(old_name, new_name):
     shutil.copy(_log_file, _log_file2)
 
 
-cmd = 'version'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('version')
+@handles(subparser)
 def handle_version():
     _print_version()
 
 
-cmd = 'dict'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('dict')
+@handles(subparser)
 def handle_dict():
     print(CTX_FILE)
 
 
-cmd = 'help'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('cmd', nargs='?', choices=sorted(subparsers.keys()))
-@handles(subparsers[cmd])
+subparser = subparsers.add_parser('help')
+subparser.add_argument('cmd', nargs='?', choices=sorted(subparsers.keys()))
+@handles(subparser)
 def handle_help(cmd):
     if cmd:
         subparsers[cmd].print_help()
