@@ -397,6 +397,33 @@ def handle_del(keys, pop, verbose):
         popped_keys.add(key)
 
 
+def _get_contexts(include_default=True):
+    files = os.listdir(CTX_HOME)
+    ext = '.json'
+    names = [f.rpartition(ext)[0] for f in files if f.endswith(ext)]
+    if CTX_NAME not in names:
+        names.append(CTX_NAME)
+    if not include_default:
+        try:
+            names.remove(DEFAULT_CTX_NAME)
+        except:
+            pass
+    names.sort()
+    return names
+
+
+cmd = 'get-ctx'
+subparsers[cmd] = subparser_group.add_parser(cmd)
+subparsers[cmd].add_argument('-a', '--all', action='store_true')
+@handles(subparsers[cmd])
+def handle_get_ctx(all):
+    if all:
+        for name in _get_contexts():
+            print(name)
+    else:
+        print(CTX_NAME)
+
+
 def _set_ctx(name):
     with open(CTX_NAME_FILE, 'w') as fid:
         fid.write(name)
@@ -433,33 +460,6 @@ def handle_set_ctx(name, verbose):
             COLOR[''],
             '"',
         )))
-
-
-def _get_contexts(include_default=True):
-    files = os.listdir(CTX_HOME)
-    ext = '.json'
-    names = [f.rpartition(ext)[0] for f in files if f.endswith(ext)]
-    if CTX_NAME not in names:
-        names.append(CTX_NAME)
-    if not include_default:
-        try:
-            names.remove(DEFAULT_CTX_NAME)
-        except:
-            pass
-    names.sort()
-    return names
-
-
-cmd = 'get-ctx'
-subparsers[cmd] = subparser_group.add_parser(cmd)
-subparsers[cmd].add_argument('-a', '--all', action='store_true')
-@handles(subparsers[cmd])
-def handle_get_ctx(all):
-    if all:
-        for name in _get_contexts():
-            print(name)
-    else:
-        print(CTX_NAME)
 
 
 cmd = 'del-ctx'
