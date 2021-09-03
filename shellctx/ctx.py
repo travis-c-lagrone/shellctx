@@ -23,11 +23,9 @@ import os  # TODO refactor uses of module `os.path` to `pathlib`
 import sys
 
 from abc import ABC, abstractmethod
+from argparse import BooleanOptionalAction
 
 __version__ = '1.0.0-dev.0'
-
-WINDOWS = sys.platform.startswith('win')  # TODO refactor `sys.platform` constant to `platform` module
-ISATTY = sys.stdout.isatty()
 
 # ANSI coloring
 COLOR = {
@@ -39,9 +37,6 @@ COLOR = {
     'yellow': '\033[0;33m',
 }
 
-if WINDOWS or not ISATTY:  # TODO test more elegantly if terminal colors supported on Windows
-    COLOR = dict.fromkeys(COLOR.keys(), '')
-
 STYLE = {
     '': COLOR[''],  # blank
     'key': COLOR['green'],
@@ -51,9 +46,16 @@ STYLE = {
     'context': COLOR['blue'],
 }
 
-ENV_CTX_HOME = os.environ.get('CTX_HOME', None)
-ENV_CTX_NAME = os.environ.get('CTX_NAME', None)
-ENV_CTX_VERBOSE = int(os.environ.get('CTX_VERBOSE', 0))
+ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
+ENV_CTX_HOME: str = os.environ.get('CTX_HOME', None)
+ENV_CTX_NAME: str = os.environ.get('CTX_NAME', None)
+ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
+
+# TODO use CTX_COLOR everywhere
+if ENV_CTX_COLOR:
+    CTX_COLOR = ENV_CTX_COLOR
+else:
+    CTX_COLOR = not sys.platform.startswith('win') and sys.stdout.isatty()
 
 CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
 CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
@@ -122,7 +124,6 @@ class LazyData(ABC):
         if self._modified:
             self._save()
 
-
 class ContextData(LazyData):
     def _get_default_data(self):
         return {}
@@ -155,7 +156,6 @@ class ContextData(LazyData):
     def values(self):
         return self._data.values()
 
-
 class LogData(LazyData):
     def _get_default_data(self):
         return []
@@ -163,13 +163,29 @@ class LogData(LazyData):
     def append(self, timestamp, command, *args):
         self._data.append((timestamp, command, *args))
 
-
 CTX = ContextData(CTX_FILE)
 LOG = LogData(LOG_FILE)
 
 
-print_err = functools.partial(print, file=sys.stderr)
+class KeysError(KeyError):
+    def __init__(self, keys=None):
+        super().__init__()
+        if keys is None:
+            self.keys = []
+        else:
+            self.keys = list(keys)
 
+    def __str__(self):
+        return str(self.keys)[1:-1]
+
+class KeyExistsError(LookupError):
+    pass
+
+class ContextExistsError(KeyExistsError):
+    pass
+
+
+print_err = functools.partial(print, file=sys.stderr)
 
 def _print_version():
     s = ('shellctx version ',
@@ -179,7 +195,6 @@ def _print_version():
          )
     print_err(''.join(s))
 
-
 def _print_verbose():
     print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
     _print_version()
@@ -187,7 +202,6 @@ def _print_verbose():
         print_err('CTX_HOME=%s' % ENV_CTX_HOME)
     if ENV_CTX_NAME:
         print_err('CTX_NAME=%s' % ENV_CTX_NAME)
-
 
 def _print_parsed_args(args):
     print_err('parsed args:')
@@ -208,7 +222,6 @@ def _print_parsed_args(args):
             )
         print_err(''.join(s))
 
-
 def _print_debug(args):
     print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
     _print_version()
@@ -217,7 +230,6 @@ def _print_debug(args):
     print_err('context home: %s' % CTX_HOME)
     print_err('context file: %s' % CTX_FILE)
     _print_parsed_args(args)
-
 
 def _print_full_items():
     # timestamp, key, value
@@ -247,17 +259,14 @@ def _print_full_items():
 def get_now():
     return datetime.datetime.now().isoformat()
 
-
 NOW = get_now()
 
 
 def set_handler(parser, handler):
     parser.set_defaults(_handler=handler)
 
-
 def handle(args):
     args._handler(args)
-
 
 def handles(parser):
     """Decorates a function:
@@ -301,27 +310,33 @@ type(subparsers).keys = lambda self: self._name_parser_map.keys()
 
 
 subparser = subparsers.add_parser('get')
-subparser.add_argument('key')
+subparser.add_argument('keys', nargs='*', default=CTX.keys(), metavar='key')
 @handles(subparser)
-def handle_get(key):
-    v = CTX[key][1]
-    s = (STYLE['value'],
-        v,
-        COLOR[''],
-        )
-    print(''.join(s))
+def handle_get(keys):
+    assert keys
+
+    missing = [k for k in keys if k not in CTX]
+    if missing:
+        raise KeysError(missing)
+
+    for key in keys:
+        print(''.join((
+            STYLE['value'],
+            CTX[key][1],
+            COLOR[''],
+        )))
 
 
-# TODO add `add` command (like set, except it errors out if the key already exists)
-# TODO add 'replace' command (like set, except it errors out if the key does not already exist)
 subparser = subparsers.add_parser('set')
 subparser.add_argument('key')
 subparser.add_argument('value')
-subparser.add_argument('-e', '--entry', action='store_true')
 subparser.add_argument('-p', '--path', action='store_true')
-subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+exclusive_group = subparser.add_mutually_exclusive_group()
+exclusive_group.add_argument('-e', '--entry', action='store_true')
+exclusive_group.add_argument('-n', '--no-clobber', action='store_true')
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 @handles(subparser)
-def handle_set(key, value, entry, path, verbose):
+def handle_set(key, value, path, entry, no_clobber, verbose):
     if path:
         base = os.getcwd()
         value = base if value == '.' else os.path.join(base, value)
@@ -345,6 +360,9 @@ def handle_set(key, value, entry, path, verbose):
         key = prefix + ('%03i' % next_num)
         assert(key not in CTX)
 
+    if no_clobber and key in CTX:
+        return 1
+
     LOG.append(NOW, 'set', key, value)
     CTX[key] = (NOW, value)
 
@@ -364,7 +382,7 @@ def handle_set(key, value, entry, path, verbose):
 subparser = subparsers.add_parser('del')
 subparser.add_argument('keys', nargs='+', metavar='key')
 subparser.add_argument('-p', '--pop', action='store_true')
-subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 @handles(subparser)
 def handle_del(keys, pop, verbose):
     for key in keys:
@@ -398,8 +416,12 @@ def handle_del(keys, pop, verbose):
 subparser = subparsers.add_parser('copy')
 subparser.add_argument('old-key')
 subparser.add_argument('new-key')
+subparser.add_argument('--force', action='store_true')
 @handles(subparser)
-def handle_copy(old_key, new_key):
+def handle_copy(old_key, new_key, force):
+    if new_key in CTX and not force:
+        raise KeyExistsError(new_key)
+
     LOG.append(NOW, 'copy', old_key, new_key)
     CTX[new_key] = (NOW, CTX[old_key][1])
 
@@ -407,8 +429,12 @@ def handle_copy(old_key, new_key):
 subparser = subparsers.add_parser('rename')
 subparser.add_argument('old-key')
 subparser.add_argument('new-key')
+subparser.add_argument('--force', action='store_true')
 @handles(subparser)
-def handle_rename(old_key, new_key):
+def handle_rename(old_key, new_key, force):
+    if new_key in CTX and not force:
+        raise KeyExistsError(new_key)
+
     LOG.append(NOW, 'rename', old_key, new_key)
     CTX[new_key] = CTX[old_key]
     del CTX[old_key]
@@ -431,13 +457,31 @@ def _get_contexts(include_default=True):
 
 subparser = subparsers.add_parser('get-ctx')
 subparser.add_argument('-a', '--all', action='store_true')
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
+subparser.add_argument('--color', action=BooleanOptionalAction, default=ENV_CTX_COLOR)
 @handles(subparser)
-def handle_get_ctx(all):
-    if all:
+def handle_get_ctx(all, verbose, color):
+    if all and verbose:
         for name in _get_contexts():
-            print(name)
+            print(''.join((
+                '* ' if name == CTX_NAME else '  ',
+                STYLE['context'] if color else '',
+                name,
+                STYLE[''] if color else '',
+            )))
+    elif all:
+        for name in _get_contexts():
+            print(''.join((
+                STYLE['context'] if color else '',
+                name,
+                STYLE[''] if color else ''
+            )))
     else:
-        print(CTX_NAME)
+        print(''.join((
+            STYLE['context'] if color else '',
+            CTX_NAME,
+            STYLE[''] if color else '',
+        )))
 
 
 def _set_ctx(name):
@@ -447,7 +491,7 @@ def _set_ctx(name):
 
 subparser = subparsers.add_parser('set-ctx')
 subparser.add_argument('name', nargs='?', default=DEFAULT_CTX_NAME)
-subparser.add_argument('-v', '--verbose', action='store_true', default=ENV_CTX_VERBOSE)
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 @handles(subparser)
 def handle_set_ctx(name, verbose):
     if ENV_CTX_NAME and name != ENV_CTX_NAME:
@@ -505,11 +549,8 @@ def handle_copy_ctx(old_name, new_name, force):
     new_ctx_file = os.path.join(CTX_HOME, new_name + '.json')
     new_log_file = os.path.join(CTX_HOME, new_name + '.log')
 
-    if not force:
-        if os.path.exists(new_ctx_file):
-            raise FileExistsError(new_ctx_file)
-        if os.path.exists(new_log_file):
-            raise FileExistsError(new_log_file)
+    if (os.path.exists(new_ctx_file) or os.path.exists(new_log_file)) and not force:
+        raise ContextExistsError(new_name)
 
     import shutil
     shutil.copy(old_ctx_file, new_ctx_file)
@@ -532,12 +573,12 @@ def handle_rename_ctx(old_name, new_name, force):
         if force:
             os.remove(new_ctx_file)
         else:
-            raise FileExistsError(new_ctx_file)
+            raise ContextExistsError(new_name)
     if os.path.exists(new_log_file):
         if force:
             os.remove(new_log_file)
         else:
-            raise FileExistsError(new_log_file)
+            raise ContextExistsError(new_name)
 
     os.rename(old_ctx_file, new_ctx_file)
     os.rename(old_log_file, new_log_file)
@@ -547,7 +588,7 @@ subparser = subparsers.add_parser('shell')
 subparser.add_argument('cmd-key', metavar='command-key')
 subparser.add_argument('arg-keys', nargs='*', metavar='argument-keys')
 subparser.add_argument('-d', '--dry-run', action='store_true')
-subparser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 @handles(subparser)
 def handle_shell(cmd_key, arg_keys, dry_run, verbose):
     cmd = CTX[cmd_key][1]
@@ -572,7 +613,7 @@ subparser = subparsers.add_parser('exec')
 subparser.add_argument('cmd-key', metavar='command-key')
 subparser.add_argument('args', nargs='*', metavar='arguments')
 subparser.add_argument('-d', '--dry-run', action='store_true')
-subparser.add_argument('-v', '--verbose', action=argparse.BooleanOptionalAction, default=bool(ENV_CTX_VERBOSE))
+subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 @handles(subparser)
 def handle_exec(cmd_key, args, verbose, dry_run):
     import shlex
@@ -693,18 +734,19 @@ def handle_clear(name):
     CTX.clear()
 
 
-subparser = subparsers.add_parser('version')
-@handles(subparser)
-def handle_version():
-    _print_version()
-
-
 subparser = subparsers.add_parser('dict')
 @handles(subparser)
 def handle_dict():
     print(CTX_FILE)
 
 
+subparser = subparsers.add_parser('version')
+@handles(subparser)
+def handle_version():
+    _print_version()
+
+
+# This must be the last subparser defined because of the need to specify all others as the choices.
 subparser = subparsers.add_parser('help')
 subparser.add_argument('cmd', nargs='?', choices=sorted(subparsers.keys()))
 @handles(subparser)
