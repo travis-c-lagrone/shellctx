@@ -27,8 +27,9 @@ from argparse import BooleanOptionalAction
 
 __version__ = '1.0.0-dev.0'
 
+
 # ANSI coloring
-COLOR = {
+_COLOR = {
     '': '\033[0m',  # reset
     'black': '\033[0;30m',
     'red': '\033[0;31m',
@@ -37,25 +38,48 @@ COLOR = {
     'yellow': '\033[0;33m',
 }
 
-STYLE = {
-    '': COLOR[''],  # blank
-    'key': COLOR['green'],
-    'value': COLOR['blue'],
-    'time': COLOR['red'],
-    'command': COLOR['blue'],
-    'context': COLOR['blue'],
+_STYLE = {
+    '': _COLOR[''],  # blank
+    'key': _COLOR['green'],
+    'value': _COLOR['blue'],
+    'time': _COLOR['red'],
+    'command': _COLOR['blue'],
+    'context': _COLOR['blue'],
 }
+
+_NO_COLOR = {k: '' for k in _COLOR}
+_NO_STYLE = {k: '' for k in _STYLE}
+
+COLOR: dict[str, str]
+STYLE: dict[str, str]
+
+def enable_color(enable=True):
+    global COLOR, STYLE
+    if enable:
+        COLOR = _COLOR
+        STYLE = _STYLE
+    else:
+        COLOR = _NO_COLOR
+        STYLE = _NO_STYLE
+
 
 ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
 ENV_CTX_HOME: str = os.environ.get('CTX_HOME', None)
 ENV_CTX_NAME: str = os.environ.get('CTX_NAME', None)
 ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
 
+
 # TODO use CTX_COLOR everywhere
 if ENV_CTX_COLOR:
     CTX_COLOR = ENV_CTX_COLOR
 else:
     CTX_COLOR = not sys.platform.startswith('win') and sys.stdout.isatty()
+
+if CTX_COLOR:
+    enable_color(True)
+else:
+    enable_color(False)
+
 
 CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
 CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
@@ -640,8 +664,9 @@ def handle_exec(cmd_key, args, verbose, dry_run):
 
 
 subparser = subparsers.add_parser('keys')
+subparser.add_argument('--color', action=BooleanOptionalAction, default=CTX_COLOR)
 @handles(subparser)
-def handle_keys():
+def handle_keys(color):
     keys = sorted(CTX.keys())
     for k in keys:
         s = (STYLE['key'],
