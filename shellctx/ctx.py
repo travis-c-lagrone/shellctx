@@ -24,43 +24,49 @@ import sys
 
 from abc import ABC, abstractmethod
 from argparse import BooleanOptionalAction
+from enum import Enum, auto
+from types import SimpleNamespace
 
 __version__ = '1.0.0-dev.0'
 
 
+
 # ANSI coloring
-_COLOR = {
-    '': '\033[0m',  # reset
-    'black': '\033[0;30m',
-    'red': '\033[0;31m',
-    'green': '\033[0;32m',
-    'blue': '\033[0;94m',
-    'yellow': '\033[0;33m',
-}
+CTX_COLOR: bool
 
-_STYLE = {
-    '': _COLOR[''],  # blank
-    'key': _COLOR['green'],
-    'value': _COLOR['blue'],
-    'time': _COLOR['red'],
-    'command': _COLOR['blue'],
-    'context': _COLOR['blue'],
-}
+class Color(Enum):
+    BLACK  = '\033[0;30m'
+    RED    = '\033[0;31m'
+    GREEN  = '\033[0;32m'
+    BLUE   = '\033[0;94m'
+    YELLOW = '\033[0;33m'
+    RESET  = '\033[0m'
 
-_NO_COLOR = {k: '' for k in _COLOR}
-_NO_STYLE = {k: '' for k in _STYLE}
+    def __init__(self, ansi_code):
+        self.ansi_code = ansi_code
 
-COLOR: dict[str, str]
-STYLE: dict[str, str]
+    def format(self, text: str, *, reset=True):
+        if CTX_COLOR:
+            parts = [self.ansi_code, text]
+            if reset:
+                parts.append(self.RESET.ansi_code)
+            return ''.join(parts)
+        else:
+            return text
 
-def enable_color(enable=True):
-    global COLOR, STYLE
-    if enable:
-        COLOR = _COLOR
-        STYLE = _STYLE
-    else:
-        COLOR = _NO_COLOR
-        STYLE = _NO_STYLE
+class Style(Enum):
+    KEY     = Color.GREEN
+    VALUE   = Color.BLUE
+    TIME    = Color.RED
+    COMMAND = Color.BLUE
+    CONTEXT = Color.BLUE
+    RESET   = Color.RESET
+
+    def __init__(self, color):
+        self.color = color
+
+    def format(self, text: str, *, reset=True):
+        return self.color.format(text, reset=reset)
 
 
 ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
@@ -73,13 +79,7 @@ ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
 if ENV_CTX_COLOR:
     CTX_COLOR = ENV_CTX_COLOR
 else:
-    CTX_COLOR = not sys.platform.startswith('win') and sys.stdout.isatty()
-
-if CTX_COLOR:
-    enable_color(True)
-else:
-    enable_color(False)
-
+    CTX_COLOR = sys.stdout.isatty() and not sys.platform.startswith('win')
 
 CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
 CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
@@ -212,12 +212,10 @@ class ContextExistsError(KeyExistsError):
 print_err = functools.partial(print, file=sys.stderr)
 
 def _print_version():
-    s = ('shellctx version ',
-         COLOR['red'],
-         __version__,
-         COLOR['']
-         )
-    print_err(''.join(s))
+    print_err(''.join((
+        'shellctx version ',
+        Color.RED.format(__version__)
+    )))
 
 def _print_verbose():
     print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
@@ -234,17 +232,13 @@ def _print_parsed_args(args):
     for (key, value) in args_D.items():
         if key.startswith('_'):
             continue
-        s = ('    ',
-             STYLE['key'],
-             key,
-             STYLE[''],
-             ':',
-             ' ' * (1 + (max_key_len - len(key))),
-             STYLE['value'],
-             repr(value),
-             STYLE['']
-            )
-        print_err(''.join(s))
+        print_err(''.join((
+            '    ',
+            Style.KEY.format(key),
+            ':',
+            ' ' * (1 + (max_key_len - len(key))),
+            Style.VALUE.format(repr(value)),
+        )))
 
 def _print_debug(args):
     print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
@@ -259,25 +253,27 @@ def _print_full_items():
     # timestamp, key, value
     everything = [(v[0], k, v[1]) for k, v in CTX.items()]
     x = sorted(everything, reverse=True)
-    s = ('Using context ', STYLE['context'], CTX_NAME, COLOR[''], '')
+    s = ['Using context ', Style.CONTEXT.format(CTX_NAME)]
     if ENV_CTX_NAME:
-        s = s + (' (set by CTX_NAME)', )
+        s.append(' (set by CTX_NAME)')
     if ENV_CTX_HOME:
-        s = s + ((' (from CTX_HOME=%s)' % ENV_CTX_HOME),)
+        s.append(' (from CTX_HOME={ENV_CTX_HOME})')
     print(''.join(s))
-    s = ('There are ', STYLE['value'], str(len(everything)),
-        COLOR[''], ' entries.\n')
-    print(''.join(s))
+    print(''.join((
+        'There are ',
+        Style.VALUE.format(str(len(everything))),
+        ' entries.'
+    )))
+    print()
 
     for ctime, _key, _value in x:
-        s = (STYLE['time'],
-             ctime, '    ',
-             STYLE['key'], _key,
-             COLOR[''], ' = ',
-             STYLE['value'], str(_value),
-             COLOR['']
-             )
-        print(''.join(s))
+        print(''.join((
+            Style.TIME.format(ctime),
+            '\t',
+            Style.KEY.format(_key),
+            ' = ',
+            Style.VALUE.format(str(_value)),
+        )))
 
 
 def get_now():
@@ -333,22 +329,63 @@ type(subparsers).__getitem__ = lambda self, key: self._name_parser_map[key]
 type(subparsers).keys = lambda self: self._name_parser_map.keys()
 
 
+class Get(Enum):
+    ITEMS = auto()
+    KEYS = auto()
+    VALUES = auto()
+
+class MissingAction(Enum):
+    FORCE = auto()
+    SKIP = auto()
+
 subparser = subparsers.add_parser('get')
-subparser.add_argument('keys', nargs='*', default=CTX.keys(), metavar='key')
+subparser.add_argument('keys', nargs='*', metavar='key')
+group = subparser.add_mutually_exclusive_group()
+group.add_argument('-f', '--force', action='store_const', const=MissingAction.FORCE, dest='missing_action')
+group.add_argument('-s', '--skip-missing', action='store_const', const=MissingAction.SKIP, dest='missing_action')
+group = subparser.add_mutually_exclusive_group()
+group.add_argument('-i', '--items', action='store_const', const=Get.ITEMS, dest='get')
+group.add_argument('-k', '--keys', action='store_const', const=Get.KEYS, dest='get')
+group.add_argument('-v', '--values', action='store_const', const=Get.VALUES, dest='get')
 @handles(subparser)
-def handle_get(keys):
-    assert keys
+def handle_get(keys, get, missing_action):
+    if not keys:
+        if get is None:
+            return
+        keys = sorted(CTX.keys())
+    elif missing_action != MissingAction.FORCE:
+        missing_keys = {k for k in keys if k not in CTX}
+        if missing_keys:
+            raise KeysError(missing_keys)
 
-    missing = [k for k in keys if k not in CTX]
-    if missing:
-        raise KeysError(missing)
-
+    get = get or Get.VALUES
     for key in keys:
-        print(''.join((
-            STYLE['value'],
-            CTX[key][1],
-            COLOR[''],
-        )))
+        if key in CTX:
+            if get == Get.VALUES:
+                print(Style.KEY.format(CTX[key][1]))
+            elif get == Get.ITEMS:
+                print(''.join((
+                    Style.KEY.format(key),
+                    '=',
+                    Style.VALUE.format(CTX[key][1])
+                )))
+            elif get == Get.KEYS:
+                print(Style.KEY.format(key))
+            else:
+                raise NotImplementedError(get)
+        elif missing_action == MissingAction.FORCE:
+                print()
+        elif missing_action == MissingAction.SKIP:
+            continue
+        else:
+            raise NotImplementedError(missing_action)
+
+
+subparser = subparsers.add_parser('keys')
+@handles(subparser)
+def handle_keys():
+    for key in sorted(CTX.keys()):
+        print(Style.KEY.format(key))
 
 
 subparser = subparsers.add_parser('set')
@@ -392,13 +429,9 @@ def handle_set(key, value, path, entry, no_clobber, verbose):
 
     if verbose:
         print(''.join((
-            STYLE['key'],
-            key,
-            COLOR[''],
+            Style.KEY.format(key),
             '=',
-            STYLE['value'],
-            value,
-            COLOR['']
+            Style.VALUE.format(value),
         )))
 
 
@@ -428,9 +461,7 @@ def handle_del(keys, pop, verbose):
 
         if verbose:
             print(''.join((
-                STYLE['key'],
-                key,
-                STYLE[''],
+                Style.KEY.format(key),
                 '=',
             )))
 
@@ -482,30 +513,19 @@ def _get_contexts(include_default=True):
 subparser = subparsers.add_parser('get-ctx')
 subparser.add_argument('-a', '--all', action='store_true')
 subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
-subparser.add_argument('--color', action=BooleanOptionalAction, default=ENV_CTX_COLOR)
 @handles(subparser)
-def handle_get_ctx(all, verbose, color):
+def handle_get_ctx(all, verbose):
     if all and verbose:
         for name in _get_contexts():
             print(''.join((
                 '* ' if name == CTX_NAME else '  ',
-                STYLE['context'] if color else '',
-                name,
-                STYLE[''] if color else '',
+                Style.CONTEXT.format(name),
             )))
     elif all:
         for name in _get_contexts():
-            print(''.join((
-                STYLE['context'] if color else '',
-                name,
-                STYLE[''] if color else ''
-            )))
+            print(Style.CONTEXT.format(name))
     else:
-        print(''.join((
-            STYLE['context'] if color else '',
-            CTX_NAME,
-            STYLE[''] if color else '',
-        )))
+        print(Style.CONTEXT.format(CTX_NAME))
 
 
 def _set_ctx(name):
@@ -520,12 +540,9 @@ subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 def handle_set_ctx(name, verbose):
     if ENV_CTX_NAME and name != ENV_CTX_NAME:
         print_err(''.join((
-            COLOR['red'],
-            'context set by CTX_NAME as ',
-            STYLE['context'],
-            ENV_CTX_NAME,
-            COLOR['red'],
-            '. Not switching.',
+            Color.RED.format('context set by CTX_NAME as '),
+            Style.CONTEXT.format(ENV_CTX_NAME),
+            Color.RED.format('. Not switching.'),
         )))
         return 1
 
@@ -534,13 +551,9 @@ def handle_set_ctx(name, verbose):
 
     if verbose:
         print(''.join(('switching to "',
-            STYLE['context'],
-            name,
-            COLOR[''],
+            Style.CONTEXT.format(name),
             '" from "',
-            STYLE['context'],
-            CTX_NAME,
-            COLOR[''],
+            Style.CONTEXT.format(CTX_NAME),
             '"',
         )))
 
@@ -619,16 +632,13 @@ def handle_shell(cmd_key, arg_keys, dry_run, verbose):
     args_ = [CTX[k][1] for k in arg_keys]
     sh_cmd = f"{cmd} {' '.join(args_)}" if args_ else cmd
 
-    s = ('shell command: ',
-        STYLE['command'],
-        sh_cmd,
-        COLOR[''],
-        )
+    s = ['shell command: ', Style.COMMAND.format(sh_cmd)]
     if verbose:
         print_err(''.join(s))
 
     if dry_run:
-        print('dryrun ' + ''.join(s))
+        s.insert(0, 'dryrun ')
+        print(''.join(s))
     else:
         os.system(sh_cmd)
 
@@ -647,33 +657,16 @@ def handle_exec(cmd_key, args, verbose, dry_run):
     sh_cmd = shlex.split(cmd)
     sh_cmd.extend(args)
 
-    s = ('exec command: ',
-        STYLE['command'],
-        repr(args),
-        COLOR[''],
-        )
-
+    s = ['exec command: ', Style.COMMAND.format(repr(args))]
     if verbose:
-        print(''.join(s), file=sys.stderr)
+        print_err(''.join(s))
 
     if dry_run:
-        print('dryrun ' + ''.join(s))
+        s.insert(0, 'dryrun ')
+        print(''.join(s))
     else:
         proc = subprocess.Popen(sh_cmd)
         return proc.wait()
-
-
-subparser = subparsers.add_parser('keys')
-subparser.add_argument('--color', action=BooleanOptionalAction, default=CTX_COLOR)
-@handles(subparser)
-def handle_keys(color):
-    keys = sorted(CTX.keys())
-    for k in keys:
-        s = (STYLE['key'],
-            k,
-            COLOR[''],
-            )
-        print(''.join(s))
 
 
 subparser = subparsers.add_parser('items')
@@ -692,12 +685,11 @@ def handle_items(keys):
 
     # make the output resemble `env`
     for _, _key, _value in items:
-        s = (STYLE['key'], _key, COLOR[''], '=',
-             STYLE['value'],
-             _value,
-             COLOR['']
-        )
-        print(''.join(s))
+        print(''.join((
+            Style.KEY.format(_key),
+            '=',
+            Style.VALUE.format(_value),
+        )))
 
 
 subparser = subparsers.add_parser('log')
