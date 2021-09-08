@@ -29,10 +29,21 @@ from types import SimpleNamespace
 
 __version__ = '1.0.0-dev.0'
 
+#region Environment Variables
 
+ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
+ENV_CTX_HOME: str = os.environ.get('CTX_HOME', None)
+ENV_CTX_NAME: str = os.environ.get('CTX_NAME', None)
+ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
 
-# ANSI coloring
-CTX_COLOR: bool
+#endregion
+
+#region ANSI Coloring
+
+if ENV_CTX_COLOR:
+    CTX_COLOR = ENV_CTX_COLOR
+else:
+    CTX_COLOR = sys.stdout.isatty() and not sys.platform.startswith('win')
 
 class Color(Enum):
     BLACK  = '\033[0;30m'
@@ -46,13 +57,10 @@ class Color(Enum):
         self.ansi_code = ansi_code
 
     def format(self, text: str, *, reset=True):
-        if CTX_COLOR:
-            parts = [self.ansi_code, text]
-            if reset:
-                parts.append(self.RESET.ansi_code)
-            return ''.join(parts)
-        else:
-            return text
+        parts = [self.ansi_code, text]
+        if reset:
+            parts.append(self.RESET.ansi_code)
+        return ''.join(parts)
 
 class Style(Enum):
     KEY     = Color.GREEN
@@ -60,6 +68,8 @@ class Style(Enum):
     TIME    = Color.RED
     COMMAND = Color.BLUE
     CONTEXT = Color.BLUE
+    VERSION = Color.RED
+    WARNING = Color.RED
     RESET   = Color.RESET
 
     def __init__(self, color):
@@ -68,18 +78,28 @@ class Style(Enum):
     def format(self, text: str, *, reset=True):
         return self.color.format(text, reset=reset)
 
+def format_key(key: str) -> str:
+    return Style.KEY.format(key) if CTX_COLOR else key
 
-ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
-ENV_CTX_HOME: str = os.environ.get('CTX_HOME', None)
-ENV_CTX_NAME: str = os.environ.get('CTX_NAME', None)
-ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
+def format_value(value: str) -> str:
+    return Style.VALUE.format(value) if CTX_COLOR else value
 
+def format_time(time: str) -> str:
+    return Style.TIME.format(time) if CTX_COLOR else time
 
-# TODO use CTX_COLOR everywhere
-if ENV_CTX_COLOR:
-    CTX_COLOR = ENV_CTX_COLOR
-else:
-    CTX_COLOR = sys.stdout.isatty() and not sys.platform.startswith('win')
+def format_command(command: str) -> str:
+    return Style.COMMAND.format(command) if CTX_COLOR else command
+
+def format_context(context: str) -> str:
+    return Style.CONTEXT.format(context) if CTX_COLOR else context
+
+def format_version(version: str) -> str:
+    return Style.VERSION.format(version) if CTX_COLOR else version
+
+def format_warning(warning: str) -> str:
+    return Style.WARNING.format(warning) if CTX_COLOR else warning
+
+#endregion
 
 CTX_HOME = ENV_CTX_HOME or os.path.expanduser('~/.ctx')
 CTX_NAME_FILE = os.path.join(CTX_HOME, '_name.txt')
@@ -214,7 +234,7 @@ print_err = functools.partial(print, file=sys.stderr)
 def _print_version():
     print_err(''.join((
         'shellctx version ',
-        Color.RED.format(__version__)
+        format_version(__version__)
     )))
 
 def _print_verbose():
@@ -234,10 +254,10 @@ def _print_parsed_args(args):
             continue
         print_err(''.join((
             '    ',
-            Style.KEY.format(key),
+            format_key(key),
             ':',
             ' ' * (1 + (max_key_len - len(key))),
-            Style.VALUE.format(repr(value)),
+            format_value(repr(value)),
         )))
 
 def _print_debug(args):
@@ -253,7 +273,7 @@ def _print_full_items():
     # timestamp, key, value
     everything = [(v[0], k, v[1]) for k, v in CTX.items()]
     x = sorted(everything, reverse=True)
-    s = ['Using context ', Style.CONTEXT.format(CTX_NAME)]
+    s = ['Using context ', format_context(CTX_NAME)]
     if ENV_CTX_NAME:
         s.append(' (set by CTX_NAME)')
     if ENV_CTX_HOME:
@@ -261,18 +281,18 @@ def _print_full_items():
     print(''.join(s))
     print(''.join((
         'There are ',
-        Style.VALUE.format(str(len(everything))),
+        format_value(str(len(everything))),
         ' entries.'
     )))
     print()
 
     for ctime, _key, _value in x:
         print(''.join((
-            Style.TIME.format(ctime),
+            format_time(ctime),
             '\t',
-            Style.KEY.format(_key),
+            format_key(_key),
             ' = ',
-            Style.VALUE.format(str(_value)),
+            format_value(str(_value)),
         )))
 
 
@@ -362,15 +382,15 @@ def handle_get(keys, get, missing_action):
     for key in keys:
         if key in CTX:
             if get == Get.VALUES:
-                print(Style.KEY.format(CTX[key][1]))
+                print(format_key(CTX[key][1]))
             elif get == Get.ITEMS:
                 print(''.join((
-                    Style.KEY.format(key),
+                    format_key(key),
                     '=',
-                    Style.VALUE.format(CTX[key][1])
+                    format_value(CTX[key][1])
                 )))
             elif get == Get.KEYS:
-                print(Style.KEY.format(key))
+                print(format_key(key))
             else:
                 raise NotImplementedError(get)
         elif missing_action == MissingAction.FORCE:
@@ -385,7 +405,7 @@ subparser = subparsers.add_parser('keys')
 @handles(subparser)
 def handle_keys():
     for key in sorted(CTX.keys()):
-        print(Style.KEY.format(key))
+        print(format_key(key))
 
 
 subparser = subparsers.add_parser('set')
@@ -429,9 +449,9 @@ def handle_set(key, value, path, entry, no_clobber, verbose):
 
     if verbose:
         print(''.join((
-            Style.KEY.format(key),
+            format_key(key),
             '=',
-            Style.VALUE.format(value),
+            format_value(value),
         )))
 
 
@@ -461,7 +481,7 @@ def handle_del(keys, pop, verbose):
 
         if verbose:
             print(''.join((
-                Style.KEY.format(key),
+                format_key(key),
                 '=',
             )))
 
@@ -519,13 +539,13 @@ def handle_get_ctx(all, verbose):
         for name in _get_contexts():
             print(''.join((
                 '* ' if name == CTX_NAME else '  ',
-                Style.CONTEXT.format(name),
+                format_context(name),
             )))
     elif all:
         for name in _get_contexts():
-            print(Style.CONTEXT.format(name))
+            print(format_context(name))
     else:
-        print(Style.CONTEXT.format(CTX_NAME))
+        print(format_context(CTX_NAME))
 
 
 def _set_ctx(name):
@@ -540,9 +560,9 @@ subparser.add_argument('--verbose', action='count', default=ENV_CTX_VERBOSE)
 def handle_set_ctx(name, verbose):
     if ENV_CTX_NAME and name != ENV_CTX_NAME:
         print_err(''.join((
-            Color.RED.format('context set by CTX_NAME as '),
-            Style.CONTEXT.format(ENV_CTX_NAME),
-            Color.RED.format('. Not switching.'),
+            format_warning('context set by CTX_NAME as '),
+            format_context(ENV_CTX_NAME),
+            format_warning('. Not switching.'),
         )))
         return 1
 
@@ -551,9 +571,9 @@ def handle_set_ctx(name, verbose):
 
     if verbose:
         print(''.join(('switching to "',
-            Style.CONTEXT.format(name),
+            format_context(name),
             '" from "',
-            Style.CONTEXT.format(CTX_NAME),
+            format_context(CTX_NAME),
             '"',
         )))
 
@@ -632,7 +652,7 @@ def handle_shell(cmd_key, arg_keys, dry_run, verbose):
     args_ = [CTX[k][1] for k in arg_keys]
     sh_cmd = f"{cmd} {' '.join(args_)}" if args_ else cmd
 
-    s = ['shell command: ', Style.COMMAND.format(sh_cmd)]
+    s = ['shell command: ', format_command(sh_cmd)]
     if verbose:
         print_err(''.join(s))
 
@@ -657,7 +677,7 @@ def handle_exec(cmd_key, args, verbose, dry_run):
     sh_cmd = shlex.split(cmd)
     sh_cmd.extend(args)
 
-    s = ['exec command: ', Style.COMMAND.format(repr(args))]
+    s = ['exec command: ', format_command(repr(args))]
     if verbose:
         print_err(''.join(s))
 
@@ -686,9 +706,9 @@ def handle_items(keys):
     # make the output resemble `env`
     for _, _key, _value in items:
         print(''.join((
-            Style.KEY.format(_key),
+            format_key(_key),
             '=',
-            Style.VALUE.format(_value),
+            format_value(_value),
         )))
 
 
