@@ -1,16 +1,18 @@
-"""
 #!/usr/bin/env python3
-shellctx
+"""
+tclg-shellctx
 --------
 
 Shell Context Helper
 
-Web:      https://github.com/serwy/shellctx
+Repository: https://github.com/travis-c-lagrone/python-tclg-shellctx
+Author:     Travis C. LaGrone
+Date:       2021-09-15
+License:    GNU GPLv3, https://www.gnu.org/licenses/gpl-3.0.en.html
 
-Author:   Roger D. Serwy
-Date:     2020-06-26
-License:  GNU GPLv3, https://www.gnu.org/licenses/gpl-3.0.en.html
-
+Original Repository: https://github.com/serwy/shellctx
+Original Author:     Roger D. Serwy
+Original License:    GNU GPLv3, https://www.gnu.org/licenses/gpl-3.0.en.html
 
 """
 
@@ -20,31 +22,52 @@ import os
 import sys
 
 from abc import ABC, abstractmethod
-from argparse import Action, ArgumentParser, BooleanOptionalAction, Namespace
+from argparse import (Action, ArgumentParser, BooleanOptionalAction,
+                      Namespace, RawDescriptionHelpFormatter,)
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from enum import Enum, auto
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from types import FunctionType
-from typing import Optional, Union
+from typing import Optional, TypeVar, Union
 
-__version__ = '1.0.0-dev.0'
+
+__version__ = '1.0.0-alpha.1'
 
 #region Configuration & Common Utilities
 
 #region Environment Variables
 
-ENV_CTX_COLOR: bool = bool(int(os.environ['CTX_COLOR'])) if 'CTX_COLOR' in os.environ else None
-ENV_CTX_HOME: str = os.environ.get('CTX_HOME', None)
-ENV_CTX_NAME: str = os.environ.get('CTX_NAME', None)
-ENV_CTX_VERBOSE: int = int(os.environ.get('CTX_VERBOSE', 0))
+T = TypeVar('T')
+def get_environ_variable(name: str, type: Callable[[str], T]=str) -> Optional[T]:
+    value = None
+    if name in os.environ and os.environ[name]:
+        value = type(os.environ[name])
+    return value
+
+def bool_int(x: str) -> bool:
+    return bool(int(x))
+
+ENV_CTX_COLOR: Optional[bool] = get_environ_variable('CTX_COLOR', type=bool_int)
+ENV_CTX_DEBUG: Optional[bool] = get_environ_variable('CTX_DEBUG', type=bool_int)
+ENV_CTX_HOME: Optional[str] = get_environ_variable('CTX_HOME')
+ENV_CTX_NAME: Optional[str] = get_environ_variable('CTX_NAME')
+ENV_CTX_VERBOSE: Optional[bool] = get_environ_variable('CTX_VERBOSE', type=bool_int)
+
+ENV_DOCS = {
+    'CTX_COLOR': 'set the --color/--no-color global option (int: 1 or 0)',
+    'CTX_DEBUG': 'set the --debug/--no-debug global option (int: 1 or 0)',
+    'CTX_HOME': 'the directory in which this program persists data (str: absolute path)',
+    'CTX_NAME': 'the name of the context to use as the current context (str)',
+    'CTX_VERBOSE': 'set the --verbose/--no-verbose global option (int: 1 or 0)',
+}
 
 #endregion
 
 #region ANSI Coloring
 
-CTX_COLOR = ENV_CTX_COLOR if ENV_CTX_COLOR is not None else False
+CTX_COLOR: bool = ENV_CTX_COLOR if ENV_CTX_COLOR is not None else False
 
 class AnsiColor(Enum):
     BLACK  = '\033[0;30m'
@@ -254,47 +277,50 @@ class DefaultContextError(ValueError):
 
 #region Printing Information
 
+CTX_VERBOSE: bool = ENV_CTX_VERBOSE if ENV_CTX_VERBOSE is not None else False
+CTX_DEBUG: bool = ENV_CTX_DEBUG if ENV_CTX_DEBUG is not None else False
+
 print_err = partial(print, file=sys.stderr)
 
-def _print_version():
+def print_debug(args: Namespace):
     print_err(''.join((
-        'shellctx version ',
-        format_version(__version__)
+        format_key('CTX_VERSION'),
+        ' = ',
+        format_version(repr(__version__))
     )))
+    print_err()
 
-def _print_verbose():
-    print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
-    _print_version()
-    if ENV_CTX_HOME:
-        print_err('CTX_HOME=%s' % ENV_CTX_HOME)
-    if ENV_CTX_NAME:
-        print_err('CTX_NAME=%s' % ENV_CTX_NAME)
+    for prefix in ('ENV_', ''):
+        for key in ENV_DOCS.keys():
+            name = prefix + key
+            value = globals()[name]
+            print_err(''.join((
+                format_key(name),
+                ' = ',
+                format_value(repr(value))
+            )))
+        print_err()
 
-def _print_parsed_args(args: Namespace):
-    print_err('parsed args:')
-    args_D = vars(args)
-    max_key_len = max(len(k) for k in args_D.keys())
-    for (key, value) in args_D.items():
-        if key.startswith('_'):
+    for name in dir(args):
+        if (
+            name.startswith('__')
+            or (
+                name.startswith('_')
+                and (
+                    inspect.ismethod(attr := getattr(args, name))
+                    or inspect.ismethoddescriptor(attr)))
+        ):
             continue
+
+        value = getattr(args, name)
         print_err(''.join((
-            '    ',
-            format_key(key),
-            ':',
-            ' ' * (1 + (max_key_len - len(key))),
+            format_key(f'args.{name}'),
+            ' = ',
             format_value(repr(value)),
         )))
+    print_err()
 
-def _print_debug(args: Namespace):
-    print_err('CTX_VERBOSE=%i' % ENV_CTX_VERBOSE)
-    _print_version()
-    print_err('CTX_HOME=%s' % ENV_CTX_HOME)
-    print_err('CTX_NAME=%s' % ENV_CTX_NAME)
-    print_err('context home: %s' % CTX_HOME)
-    print_err('context file: %s' % CTX_FILE)
-    _print_parsed_args(args)
-
-def _print_full_items():
+def print_full_items():
     # timestamp, key, value
     everything = [(v[0], k, v[1]) for k, v in CTX.items()]
     x = sorted(everything, reverse=True)
@@ -302,7 +328,7 @@ def _print_full_items():
     if ENV_CTX_NAME:
         s.append(' (set by CTX_NAME)')
     if ENV_CTX_HOME:
-        s.append(' (from CTX_HOME={ENV_CTX_HOME})')
+        s.append(f" (from CTX_HOME={ENV_CTX_HOME})")
     print(''.join(s))
     print(''.join((
         'There are ',
@@ -358,15 +384,35 @@ def handles(parser: ArgumentParser) -> Callable[[FunctionType], None]:
         has__args__ = '__args__' in keys
         if has__args__:
             keys = (k for k in keys if k != '__args__')
+        @wraps(handler)
         def wrapped(args):
             kwargs = {k: getattr(args, k) for k in keys}
             if has__args__:
                 kwargs['__args__'] = args
             return handler(**kwargs)
         set_handler(parser, wrapped)
+        return wrapped
     return set_wrapped_handler
 
 #endregion
+
+#region Global Option Infrastructure
+
+def global_option_action(cls: Action):
+    __call__ = cls.__call__  # the original unwrapped and unbound __call__ implementation
+    @wraps(__call__)
+    def wrapped(self, parser: ArgumentParser, namespace: Namespace, values: Sequence, option_string: str=None) -> None:
+        if not hasattr(namespace, '_defaulted_globals'):
+            namespace._explicitly_set_globals = set()
+        if self.dest not in namespace._explicitly_set_globals:
+            __call__(self, parser, namespace, values, option_string)
+            namespace._explicitly_set_globals.add(self.dest)
+    cls.__call__ = wrapped
+    return cls
+
+@global_option_action
+class GlobalBooleanOptionalAction(BooleanOptionalAction):
+    pass
 
 class AbbreviatableBooleanOptionalAction(Action):
     # assumes that the only prefix char is '-'
@@ -435,35 +481,58 @@ class AbbreviatableBooleanOptionalAction(Action):
     def format_usage(self):
         return ' | '.join(self.short_option_strings)
 
-class ColorAction(AbbreviatableBooleanOptionalAction):
+@global_option_action
+class GlobalAbbreviatableBooleanOptionalAction(AbbreviatableBooleanOptionalAction):
+    pass
+
+#endregion
+
+class GlobalColorAction(GlobalAbbreviatableBooleanOptionalAction):
     def __call__(self, parser: ArgumentParser, namespace: Namespace, values: Sequence, option_string: str=None) -> None:
         super().__call__(parser, namespace, values, option_string)
         global CTX_COLOR
         CTX_COLOR = getattr(namespace, self.dest)
 
+class GlobalVerboseAction(GlobalBooleanOptionalAction):
+    def __call__(self, parser: ArgumentParser, namespace: Namespace, values: Sequence, option_string: str=None) -> None:
+        super().__call__(parser, namespace, values, option_string)
+        global CTX_VERBOSE
+        CTX_VERBOSE = getattr(namespace, self.dest)
+
+class GlobalDebugAction(GlobalBooleanOptionalAction):
+    def __call__(self, parser: ArgumentParser, namespace: Namespace, values: Sequence, option_string: str=None) -> None:
+        super().__call__(parser, namespace, values, option_string)
+        global CTX_DEBUG
+        CTX_DEBUG = getattr(namespace, self.dest)
+
 global_options = ArgumentParser(add_help=False, allow_abbrev=False)
-group = global_options.add_argument_group('global options')
-group.add_argument('--color', action=ColorAction, default=CTX_COLOR)
-group.add_argument('--verbose', action=BooleanOptionalAction, default=ENV_CTX_VERBOSE)
+global_options.add_argument('--color',
+        action=GlobalColorAction, default=CTX_COLOR,
+        help=f"(default: {CTX_COLOR}{', as set by CTX_COLOR' if CTX_COLOR else ''})")
+global_options.add_argument('--verbose',
+        action=GlobalVerboseAction, default=CTX_VERBOSE)
+global_options.add_argument('--debug',
+        action=GlobalDebugAction, default=CTX_DEBUG)
 
 
-parser = ArgumentParser(prog='ctx', allow_abbrev=False, parents=[global_options])
-parser.add_argument('-v', '--version', action='store_true')
+parser = ArgumentParser(prog='ctx',
+        allow_abbrev=False, parents=[global_options],
+        # usage='%(prog)s [COMMAND]',
+        description=' '.join((
+            'Manage key-value pairs organized by implicit user-defined contexts.',
+            'Without any command, shows the current context and its entries.')))
+parser.add_argument('-v', '--version',
+        action='store_true',
+        help='show the version of this program and exit')
 @handles(parser)
 def handle_(version: bool, verbose: bool):
     if version:
-        if verbose:
-            _print_version()
-        else:
-            print(__version__)
+        print(format_version(__version__))
     else:
-        _print_full_items()
+        print_full_items()
 
-# TODO pass `help` (brief) for each parser/subparser
-# TODO pass `description` (full) for each parser/subparser
-# TODO pass `help` for each parser/subparser argument
 
-subparsers = parser.add_subparsers(title='commands')
+subparsers = parser.add_subparsers(metavar='COMMAND')
 type(subparsers).__getitem__ = lambda self, key: self._name_parser_map[key]
 type(subparsers).keys = lambda self: self._name_parser_map.keys()
 
@@ -478,23 +547,45 @@ class MissingAction(Enum):
     FORCE = auto()
     SKIP = auto()
 
-subparser = subparsers.add_parser('get', aliases=['g'], parents=[global_options])
-subparser.add_argument('keys', nargs='*', metavar='key')
+subparser = subparsers.add_parser('get',
+        aliases=['g'], parents=[global_options],
+        help='get the value for the key(s)',
+        usage='ctx get [KEY ...] [-f | -s] [-d | -i | -k | -v]',
+        description=' '.join((
+            'Get a representation of each key (if any).',
+            'If no format option is specified, then the value of each key is returned.',
+            'If no missing key option is specified, then an error is returned if any key is missing.',
+            'If no keys are specified, then a format option must be specified and all keys are returned.')))
+subparser.add_argument('keys',
+        nargs='*', metavar='KEY',
+        help='the key(s) whose value to return')
 group = subparser.add_argument_group('missing key handling').add_mutually_exclusive_group()
-group.add_argument('-f', '--force', action='store_const', const=MissingAction.FORCE, dest='missing_action')
-group.add_argument('-s', '--skip-missing', action='store_const', const=MissingAction.SKIP, dest='missing_action')
+group.add_argument('-f', '--force',
+        action='store_const', const=MissingAction.FORCE, dest='missing_action',
+        help='return an empty string for any missing key')
+group.add_argument('-s', '--skip-missing',
+        action='store_const', const=MissingAction.SKIP, dest='missing_action',
+        help='skip outputting any missing key')
 group = subparser.add_argument_group('return value formatting').add_mutually_exclusive_group()
-group.add_argument('-d', '--dict', action='store_const', const=GetType.DICT, dest='get_type')
-group.add_argument('-i', '--item', '--items', action='store_const', const=GetType.ITEMS, dest='get_type')
-group.add_argument('-k', '--key', '--keys', action='store_const', const=GetType.KEYS, dest='get_type')
-group.add_argument('-v', '--value', '--values', action='store_const', const=GetType.VALUES, dest='get_type')
+group.add_argument('-d', '--dict',
+        action='store_const', const=GetType.DICT, dest='get_type',
+        help='return all key-value pairs as a dictionary (JSON object)')
+group.add_argument('-i', '--items',
+        action='store_const', const=GetType.ITEMS, dest='get_type',
+        help='return all key-value pairs as items (i.e. line-oriented string data) (e.g. \'foo=bar\')')
+group.add_argument('-k', '--keys',
+        action='store_const', const=GetType.KEYS, dest='get_type',
+        help='return all keys (no values)')
+group.add_argument('-v', '--values',
+        action='store_const', const=GetType.VALUES, dest='get_type',
+        help='return all values (no keys)')
 @handles(subparser)
 def handle_get(keys: list[str], missing_action: Optional[MissingAction], get_type: Optional[GetType]):
     if not keys:
         if not get_type:
             print_err(format_warning(
                 'Error: Must supply at least one key and/or one of the following options: '
-                '--d(ict(s)), --i(tem(s)), --k(ey(s)), xor --v(alue(s)).'
+                '-d/--dict, -i/--items, -k/--keys, xor -v/--values.'
             ))
             return 1
 
@@ -553,14 +644,31 @@ def handle_get(keys: list[str], missing_action: Optional[MissingAction], get_typ
         raise NotImplementedError(get_type)
 
 
-subparser = subparsers.add_parser('set', aliases=['s'], parents=[global_options])
-subparser.add_argument('keys', nargs='+', metavar='key')
-subparser.add_argument('value')
+subparser = subparsers.add_parser('set',
+        aliases=['s'], parents=[global_options],
+        help='set the value for the key(s)',
+        usage='ctx set KEY [KEY ...] VALUE [-e | -n] [-p]',
+        description=' '.join((
+            'Set each key to the value.',
+            'Neither any key nor the value may be an empty string.',
+            'Any pre-existing key is overwritten without warning, unless the --no-clobber option is specified.')))
+subparser.add_argument('keys',
+        nargs='+', metavar='KEY',
+        help='the key(s) whose value to set')
+subparser.add_argument('value',
+        metavar='VALUE',
+        help='the value to set for the key(s); may not be the empty string')
 group = subparser.add_argument_group('key options').add_mutually_exclusive_group()
-group.add_argument('-e', '--entry', '--entries', action='store_true')
-group.add_argument('-n', '--no-clobber', action='store_true')
+group.add_argument('-e', '--entries',
+        action='store_true', dest='entry',
+        help='append a monotonically increasing non-negative integer to each key as if it were an indexed entry in an array (e.g. \'actions\' -> \'action_000\'')
+group.add_argument('-n', '--no-clobber',
+        action='store_true',
+        help='skip setting any key that is already defined')
 group = subparser.add_argument_group('value options')
-group.add_argument('-p', '--path', action='store_true')
+group.add_argument('-p', '--path',
+        action='store_true',
+        help='prepend the current working directory to the value')
 @handles(subparser)
 def handle_set(keys: list[str], value: str, path: bool, entry: bool, no_clobber: bool, verbose: bool):
     if path:
@@ -572,11 +680,10 @@ def handle_set(keys: list[str], value: str, path: bool, entry: bool, no_clobber:
         for key in keys:
             prefix = key + '_'
             N = len(prefix)
-            keys = list(CTX.keys())
-            suffix = [k[N:] for k in keys if k.startswith(prefix)]
+            suffixes = [k[N:] for k in CTX.keys() if k.startswith(prefix)]
 
-            max_num = 0
-            for num in suffix:
+            max_num = 0 if key in CTX else -1
+            for num in suffixes:
                 try:
                     num = int(num)
                 except:
@@ -585,10 +692,11 @@ def handle_set(keys: list[str], value: str, path: bool, entry: bool, no_clobber:
                     max_num = max(num, max_num)
             next_num = max_num + 1
 
-            new_key = prefix + ('%03i' % next_num)
+            new_key = prefix + str(next_num)
             assert(new_key not in CTX)
 
             new_keys.append(new_key)
+        keys = new_keys
 
     for key in keys:
         if no_clobber and key in CTX:
@@ -607,15 +715,21 @@ def handle_set(keys: list[str], value: str, path: bool, entry: bool, no_clobber:
             )))
 
 
-subparser = subparsers.add_parser('del', aliases=['d'], parents=[global_options])
-subparser.add_argument('keys', nargs='+', metavar='key')
+subparser = subparsers.add_parser('del',
+        aliases=['d'], parents=[global_options],
+        help='delete the key(s)',
+        usage='ctx del KEY [KEY ...]',
+        description=' '.join((
+            'Delete each key and its value.',
+            'Missing keys are skipped without error.')))
+subparser.add_argument('keys',
+        nargs='+', metavar='KEY',
+        help='the key(s) to delete (if they exist)')
 @handles(subparser)
 def handle_del(keys: list[str], verbose: bool):
     removed_keys = set()
     for key in keys:
         if key in removed_keys:
-            if verbose:
-                print_err(f"KeyError: {key}")
             continue
 
         LOG.append(NOW, 'del', key)
@@ -650,12 +764,27 @@ class GetContextType(Enum):
     DEFAULT = auto()
     USER = auto()
 
-subparser = subparsers.add_parser('get-ctx', aliases=['gc'], parents=[global_options])
+subparser = subparsers.add_parser('get-ctx',
+        aliases=['gc'], parents=[global_options],
+        usage='ctx get-ctx [-a | -r | -d | -u]',
+        help='get the context name(s)',
+        description=' '.join((
+            'Get the context name(s).',
+            'If no selection option is specified, the name of the current (active) context is returned.')))
 group = subparser.add_argument_group('context selection').add_mutually_exclusive_group()
 group.set_defaults(get_context_type=GetContextType.CURRENT)
-group.add_argument('-a', '--all', action='store_const', const=GetContextType.ALL, dest='get_context_type')
-group.add_argument('-d', '--default', action='store_const', const=GetContextType.DEFAULT, dest='get_context_type')
-group.add_argument('-u', '--user', action='store_const', const=GetContextType.USER, dest='get_context_type')
+group.add_argument('-a', '--all',
+        action='store_const', const=GetContextType.ALL, dest='get_context_type',
+        help='get all context names')
+group.add_argument('-r', '--current',
+        action='store_const', const=GetContextType.CURRENT, dest='get_context_type',
+        help='get the current (active) context name')
+group.add_argument('-d', '--default',
+        action='store_const', const=GetContextType.DEFAULT, dest='get_context_type',
+        help='get the (built-in) default context name')
+group.add_argument('-u', '--user',
+        action='store_const', const=GetContextType.USER, dest='get_context_type',
+        help='get all user-defined context names, if any (excludes the default context name)')
 @handles(subparser)
 def handle_get_ctx(get_context_type: GetContextType, verbose: bool):
     if get_context_type == GetContextType.ALL:
@@ -693,8 +822,18 @@ def _set_ctx(name):
     with open(CTX_NAME_FILE, 'w') as fid:
         fid.write(name)
 
-subparser = subparsers.add_parser('set-ctx', aliases=['sc'], parents=[global_options])
-subparser.add_argument('name', nargs='?', default=DEFAULT_CTX_NAME)
+subparser = subparsers.add_parser('set-ctx',
+        aliases=['sc'], parents=[global_options],
+        help='switch between contexts',
+        usage='ctx set-ctx [NAME]',
+        description=' '.join((
+            'Switch the current (active) context to the named context.',
+            f'Without any name, switches to the default context: {DEFAULT_CTX_NAME}.',
+            'It is not an error to switch to the same context that is already active.',
+            'If the named context does not exist, it is created prior to switching to it.')))
+subparser.add_argument('name',
+        nargs='?', default=DEFAULT_CTX_NAME, metavar='NAME',
+        help='the name of the context to switch to; it will be created if it does not already exist')
 @handles(subparser)
 def handle_set_ctx(name: Optional[str], verbose: bool):
     if ENV_CTX_NAME and name != ENV_CTX_NAME:
@@ -709,19 +848,34 @@ def handle_set_ctx(name: Optional[str], verbose: bool):
         _set_ctx(name)
 
     if verbose:
-        print(''.join(('switching to "',
+        print(''.join(('switching to ',
             format_context(name),
-            '" from "',
+            ' from ',
             format_context(CTX_NAME),
-            '"',
+            '',
         )))
 
 
-subparser = subparsers.add_parser('del-ctx', aliases=['dc'], parents=[global_options])
-subparser.add_argument('names', nargs='+', metavar='name')
+subparser = subparsers.add_parser('del-ctx',
+        aliases=['dc'], parents=[global_options],
+        help='delete the named context',
+        usage='ctx del-ctx NAME [NAME ...]',
+        description=' '.join((
+            'Delete the named context(s).',
+            'A single dot (.) is considered an alias for the current context.',
+            f'The default context ({DEFAULT_CTX_NAME}) may not be deleted.',
+            'It is not an error to delete a non-existent context.')))
+subparser.add_argument('names',
+        nargs='+', metavar='NAME',
+        help='; '.join((
+            'the context(s) to delete',
+            'a dot (.) denotes the current context',
+            f'may not be the default context ({DEFAULT_CTX_NAME})')))
 @handles(subparser)
-def handle_del_ctx(names: list[str]):
+def handle_del_ctx(names: list[str], verbose: bool):
     assert len(names) > 0
+
+    names = [CTX_NAME if n == '.' else n for n in names]
 
     retcode = 0
     for name in names:
@@ -736,26 +890,69 @@ def handle_del_ctx(names: list[str]):
                 continue
 
         ctx_file = CTX_HOME / f"{name}.json"
-        ctx_file.unlink(missing_ok=True)
-
         log_file = CTX_HOME / f"{name}.log"
+
+        ctx_file.unlink(missing_ok=True)
         log_file.unlink(missing_ok=True)
+        if verbose:
+            print_err('Deleted context ' + format_context(name))
 
         if name == CTX_NAME:
             _set_ctx(DEFAULT_CTX_NAME)
+            if verbose:
+                print_err(''.join((
+                    'Switched to the default context (',
+                    format_context(DEFAULT_CTX_NAME),
+                    ') because the current context was deleted'
+                )))
     return retcode
 
 
-subparser = subparsers.add_parser('version', parents=[global_options])
+subparser = subparsers.add_parser('env',
+        parents=[global_options], formatter_class=RawDescriptionHelpFormatter,
+        help='show all relevant environment variables',
+        usage='ctx env',
+        description='\n\n'.join((
+            ' '.join((
+                'Show all environment variables (and their values) that configure this program.',
+                'Any environment variable that is not defined is shown with the empty string as its value.')),
+            '\n'.join((
+                'environment variables:',
+                *[var.ljust(22).rjust(24) + doc for var, doc in ENV_DOCS.items()]
+            )))))
+@handles(subparser)
+def handle_env(verbose: bool):
+    for name in ENV_DOCS.keys():
+        value = globals()[f"ENV_{name}"]
+        print(''.join((
+            format_key(name),
+            '=',
+            format_value(str(value)) if value else ''
+        )))
+
+
+subparser = subparsers.add_parser('version',
+        aliases=['v'], parents=[global_options],
+        help='show the version of this program and exit',
+        usage='ctx version',
+        description='Return the current installed version of this program.')
 @handles(subparser)
 def handle_version():
-    _print_version()
+    print(format_version(__version__))
 
 
 # The 'help' subparser must be the last one defined because of the need to
 # specify the names of all others as the choices.
-subparser = subparsers.add_parser('help', parents=[global_options])
-subparser.add_argument('cmd', nargs='?', choices=sorted(subparsers.keys()))
+subparser = subparsers.add_parser('help',
+        aliases=['h'], parents=[global_options],
+        help='show the help message for a command and exit',
+        usage='ctx help [COMMAND]',
+        description=' '.join((
+            'Show the help message for the specified command (or command alias).',
+            'If no command is specified, then show the help message for this program.')))
+subparser.add_argument('cmd',
+        nargs='?', choices=list(subparsers.keys()), metavar='COMMAND',
+        help='the command (or alias) for which to show its help message')
 @handles(subparser)
 def handle_help(cmd: Optional[str]):
     if cmd:
@@ -770,10 +967,8 @@ def handle_help(cmd: Optional[str]):
 def main(args=sys.argv[1:]):
     _args = parser.parse_args(args)
 
-    if ENV_CTX_VERBOSE == 1:
-        _print_verbose()
-    elif ENV_CTX_VERBOSE > 1:
-        _print_debug(_args)
+    if CTX_DEBUG:
+        print_debug(_args)
 
     CTX_HOME.mkdir(parents=True, exist_ok=True)
     retcode = handle(_args) or 0
